@@ -1,6 +1,6 @@
 # PatchVision: a Vision Transformer vs a CNN, both trained from scratch on 200 bird species
 
-![task](https://img.shields.io/badge/task-fine--grained%20classification-blue) ![dataset](https://img.shields.io/badge/dataset-CUB--200--2011-green) ![classes](https://img.shields.io/badge/classes-200-lightgrey) ![training](https://img.shields.io/badge/pretrained%20weights-none-red) ![status](https://img.shields.io/badge/status-in%20progress%20(1%20seed)-orange)
+![task](https://img.shields.io/badge/task-fine--grained%20classification-blue) ![dataset](https://img.shields.io/badge/dataset-CUB--200--2011-green) ![classes](https://img.shields.io/badge/classes-200-lightgrey) ![training](https://img.shields.io/badge/pretrained%20weights-none-red)
 
 **The question.** With only about 27 training photos per species, can a Vision Transformer learned from scratch keep up with a CNN? We built a small hybrid Vision Transformer (**PatchVision-X**), a matched **CNN baseline**, trained both under the same recipe, and compared them on the same 5,794 unseen test photos.
 
