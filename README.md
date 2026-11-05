@@ -125,7 +125,7 @@ flowchart TD
 | | **PatchVision-X** | **CNN small** | **CNN large** |
 |---|---|---|---|
 | Core operation | Self-attention on a **graph** of image tokens | 3×3 convolutions with shared filters | same as CNN small |
-| What each layer sees | Heads see 3×3, 5×5, 9×9 neighbourhoods, or the **whole image** | Local 3×3 windows; the view grows layer by layer | same |
+| What each layer sees | Attention spans the **whole image** in every head; head groups build their queries and keys from 3×3, 5×5, 9×9, or all tokens | Local 3×3 windows; the view grows layer by layer | same |
 | Built-in assumption | Little. Locality is added by a depthwise-conv block (LFE) and the graph | "Nearby pixels belong together" | same |
 | Depth | 8 blocks (4 on 196 tokens, 4 on 49) | 8 residual blocks | 8 residual blocks |
 | Width | 256 numbers per token | 39 / 78 / 156 / 312 channels | 64 / 128 / 256 / 512 channels |

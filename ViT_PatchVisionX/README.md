@@ -204,7 +204,7 @@ We did not copy a model. We took useful ideas from two papers, and wrote the cod
 
 | | **GvT**: *Graph-based vision transformer with sparsity for training on small datasets from scratch* (Scientific Reports, 2025) | **MSCViT**: *A Small-size ViT architecture with Multi-Scale Self-Attention Mechanism for Tiny Datasets* (arXiv 2501.06040) |
 |---|---|---|
-| Idea | Treat the tokens as a **graph**: neighbouring squares are connected, and the connection strength depends on how similar they look. Attention then runs on that graph. | Give the ViT a **local sense** with small convolutions, and let different attention heads look at **different scales**. |
+| Idea | Treat the tokens as a **graph**: neighbouring squares are connected, and the connection strength depends on how similar they look. Queries and keys are built on that graph. | Give the ViT a **local sense** with small convolutions, and let different attention heads look at **different scales**. |
 | What we took | The convolutional tokenizer, graph attention, a "sparse gate" that can switch off useless links, and graph pooling (merging 196 tokens into 49). | The **Local Feature Extraction block** (a small depthwise convolution that replaces the usual position numbers), and the **multi-scale** idea. |
 | What we changed | Some details of the paper are unclear, so we chose an interpretation (marked "INTERPRETATION" in `patchvision/models.py`). | We did **not** use MSCViT's wavelet convolution or its four-stage layout. We rebuilt its multi-scale idea on the graph (next section). |
 
@@ -231,7 +231,7 @@ One photo goes in at the top, and 200 species scores come out at the bottom. The
 
 ### The multi-scale graph attention (our combination)
 
-In GvT every token is connected to its 8 neighbours. In MSCViT different attention heads work at different scales. We combined these: the model has **8 heads in 4 groups of 2**, and each group may look at a different amount of the surroundings:
+In GvT every token is connected to its 8 neighbours. In MSCViT different attention heads work at different scales. We combined these: the model has **8 heads in 4 groups of 2**, and each group builds its queries and keys from a different amount of the surroundings. The attention itself still spans all tokens in every group:
 
 ![Neighbourhood sizes of the four head groups](docs/figures/multiscale_neighbourhoods.png)
 
@@ -239,9 +239,11 @@ In GvT every token is connected to its 8 neighbours. In MSCViT different attenti
   <img src="docs/animations/neighbourhoods.gif" width="640" alt="Animation of the four neighbourhood sizes while the token moves around the grid">
 </p>
 
-* **Group 1** (3 x 3) looks only at the closest squares, good for texture.
-* **Group 2** (5 x 5) and **Group 3** (9 x 9) look at a bigger region, good for parts like a wing or a head.
-* **Group 4** (all 196) can look at the whole photo, good for context.
+* **Group 1** builds queries and keys from the 3 x 3 neighbourhood.
+* **Group 2** and **Group 3** use the 5 x 5 and 9 x 9 neighbourhoods.
+* **Group 4** uses all 196 tokens.
+
+The figure and animation show these query and key neighbourhoods, not limits on attention. We have not tested which group captures which bird features. `restrict_attention=True` in `ModelConfig` limits each group's attention to its own scale; the `ovf5_restricted` run tests this variant. No recorded run uses it.
 
 <details>
 <summary><b>More detail: what happens inside one attention layer (click to open)</b></summary>
@@ -253,7 +255,7 @@ In GvT every token is connected to its 8 neighbours. In MSCViT different attenti
 5. **Values.** Another graph convolution, guided by the attention, plus a residual connection.
 6. The attention is computed in 32-bit precision even when the rest uses 16-bit, for numerical safety.
 
-After pooling there is no photo grid any more, so the 3 x 3, 5 x 5, 9 x 9 neighbourhoods are replaced by 1, 2 and 4 steps along the *learned* connections between the 49 merged tokens (the fourth group still sees everything).
+After pooling there is no photo grid any more, so the 3 x 3, 5 x 5, 9 x 9 neighbourhoods are replaced by 1, 2 and 4 steps along the *learned* connections between the 49 merged tokens (the fourth group still uses every token).
 
 </details>
 
