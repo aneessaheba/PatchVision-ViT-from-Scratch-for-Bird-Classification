@@ -64,6 +64,7 @@ class ModelConfig:
     keep_abs_pos: bool = False        # also keep the learnable position embedding when use_lfe=True
     use_multiscale: bool = True       # heads are split into groups that attend over different graph scales
     scales: Tuple[int, ...] = (1, 2, 4, 0)   # hop radius per head group; 0 = global (all tokens)
+    restrict_attention: bool = False  # False: scales shape queries/keys only, attention spans all tokens (all runs so far)
 
     def effective_scales(self) -> Tuple[int, ...]:
         return tuple(self.scales) if self.use_multiscale else (1,)
@@ -228,6 +229,16 @@ def combined_trials() -> Dict[str, Dict[str, Any]]:
     }
 
 
+def architecture_trials() -> Dict[str, Dict[str, Any]]:
+    """Architecture variants on top of the best regularisation recipe (ovf5)."""
+    return {
+        "ovf5_restricted": {
+            "base": "full", "model": {"drop_path": 0.3, "restrict_attention": True},
+            "train": {"aug_tier": "auto", "early_stop_patience": 0},
+            "change": "ovf5 with each head's attention limited to its own scale; full 300 epochs"},
+    }
+
+
 def get_trial(name: str, seed: int = 42) -> ExperimentConfig:
-    spec = {**overfit_trials(), **combined_trials()}[name]
+    spec = {**overfit_trials(), **combined_trials(), **architecture_trials()}[name]
     return get_experiment(spec["base"], seed, spec["model"], spec["train"], run_name=name)

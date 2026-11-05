@@ -167,10 +167,16 @@ class MultiScaleGraphAttention(nn.Module):
        S_hat = diag(Z) S diag(Z); heads exchange information via a learnable h x h matrix Phi: R = Phi . S_hat.
     5. Values by graph convolution guided by R:  out = D_R^-1/2 R D_R^-1/2 (X Wv) + X.
     Attention is computed in fp32 even under mixed precision.
+
+    By default the scale masks only shape the graph used for queries and keys: S and R still span all tokens, so
+    every head can receive from anywhere. restrict_attention=True limits each head's attention to its own scale:
+    the similarity graph is normalised inside the mask, S is masked (grid) or weighted (soft pooled graph), and
+    Phi only mixes heads of the same group. The sparse gate, when on, still pools statistics over all tokens.
     """
 
     def __init__(self, dim: int, heads: int, n_tokens: int, scales: Sequence[int], attn_drop: float,
-                 proj_drop: float, use_gate: bool = True, adj_mode: str = "hadamard"):
+                 proj_drop: float, use_gate: bool = True, adj_mode: str = "hadamard",
+                 restrict_attention: bool = False):
         super().__init__()
         assert dim % heads == 0
         G = len(scales)
@@ -178,6 +184,10 @@ class MultiScaleGraphAttention(nn.Module):
         self.dim, self.heads, self.dh, self.n = dim, heads, dim // heads, n_tokens
         self.G, self.hg = G, heads // G
         self.use_gate, self.adj_mode = use_gate, adj_mode
+        self.restrict_attention = restrict_attention
+        if restrict_attention:
+            group = torch.arange(heads) // self.hg
+            self.register_buffer("phi_mask", (group[:, None] == group[None, :]).float(), persistent=False)
         dh = self.dh
         self.wq = nn.Parameter(torch.randn(heads, dh, dh) * dh ** -0.5)
         self.wk = nn.Parameter(torch.randn(heads, dh, dh) * dh ** -0.5)
@@ -213,6 +223,8 @@ class MultiScaleGraphAttention(nn.Module):
                 bases = bases.unsqueeze(0)                                           # (1,G,n,n)
             Eg = E.unsqueeze(1)
             A = bases * Eg if self.adj_mode == "hadamard" else bases + Eg           # (B,G,n,n)
+            if self.restrict_attention:                                              # cancels E's all-token softmax
+                A = A / A.sum(-1, keepdim=True).clamp_min(1e-6)
             A_hat = sym_norm(A).unsqueeze(2)                                         # (B,G,1,n,n)
 
             def graph_conv(w):                                                       # heads of a group share Â_g
@@ -221,7 +233,11 @@ class MultiScaleGraphAttention(nn.Module):
 
             # --- 2./3. graph-conv queries and keys, attention
             q, k = graph_conv(self.wq), graph_conv(self.wk)
-            S = torch.softmax((q @ k.transpose(-1, -2)) * dh ** -0.5, dim=-1)       # (B,h,n,n)
+            scores = (q @ k.transpose(-1, -2)) * dh ** -0.5                          # (B,h,n,n)
+            if self.restrict_attention:
+                head_bases = bases.repeat_interleave(hg, dim=1)                      # (1 or B,h,n,n)
+                scores = (scores + head_bases.clamp_min(1e-12).log()).masked_fill(head_bases <= 0, float("-inf"))
+            S = torch.softmax(scores, dim=-1)
             S = self.attn_drop(S)
 
             # --- 4. sparse talking-heads
@@ -237,7 +253,8 @@ class MultiScaleGraphAttention(nn.Module):
             else:
                 S_hat = S
                 gate_mean, gate_sp = x.new_ones(()), x.new_zeros(())
-            R = torch.einsum("gh,bhnm->bgnm", self.phi, S_hat).clamp_min(0.0)       # (B,h,n,n)
+            phi = self.phi * self.phi_mask if self.restrict_attention else self.phi
+            R = torch.einsum("gh,bhnm->bgnm", phi, S_hat).clamp_min(0.0)            # (B,h,n,n)
 
             # --- 5. graph-conv values guided by R, residual of the head slice
             v = torch.einsum("bhnd,hde->bhne", xh, self.wv)
@@ -254,11 +271,12 @@ class MultiScaleGraphAttention(nn.Module):
 
 class PXBlock(nn.Module):
     def __init__(self, dim, heads, n_tokens, scales, mlp_ratio, drop, attn_drop, drop_path, use_gate, adj_mode,
-                 lfe_grid: Optional[int]):
+                 lfe_grid: Optional[int], restrict_attention: bool = False):
         super().__init__()
         self.lfe = LocalFeatureExtraction(dim, lfe_grid) if lfe_grid else None
         self.norm1 = nn.LayerNorm(dim)
-        self.attn = MultiScaleGraphAttention(dim, heads, n_tokens, scales, attn_drop, drop, use_gate, adj_mode)
+        self.attn = MultiScaleGraphAttention(dim, heads, n_tokens, scales, attn_drop, drop, use_gate, adj_mode,
+                                             restrict_attention)
         self.norm2 = nn.LayerNorm(dim)
         self.mlp = Mlp(dim, mlp_ratio, drop)
         self.drop_path = DropPath(drop_path)
@@ -348,7 +366,7 @@ class PatchVisionX(nn.Module):
             self.blocks.append(PXBlock(
                 cfg.embed_dim, cfg.heads, n0 if pre_pool else n_post, self.scales, cfg.mlp_ratio, cfg.drop,
                 cfg.attn_drop, dpr[i], cfg.use_sparse_gate, cfg.adj_mode,
-                lfe_grid=g if (cfg.use_lfe and pre_pool) else None))
+                lfe_grid=g if (cfg.use_lfe and pre_pool) else None, restrict_attention=cfg.restrict_attention))
         self.pool = GraphPool(cfg.embed_dim, n_post) if self.n_pre < cfg.depth else None
         self.norm = nn.LayerNorm(cfg.embed_dim)
         self.head = nn.Linear(cfg.embed_dim, cfg.num_classes)
