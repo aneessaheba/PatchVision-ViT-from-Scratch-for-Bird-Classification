@@ -626,6 +626,8 @@ Versions we used: Python 3.11, PyTorch 2.5.1 (CUDA 12.4), torchvision 0.20.1, nu
    python train.py base 42
    python train.py ovf1_droppath0.3 42
    ```
+   These commands do not read the test set. Add `--final-test` to evaluate it, for example `python train.py full 42 --final-test`; a finished training is reused, not repeated. `run_experiment` in the notebooks also needs `run_test=True` to evaluate the test set.
+
    To re-run all four overfitting trials with a recorded notebook, open `overfitting_trials.ipynb` and run all cells (several hours; a finished trial is skipped and an interrupted one resumes).
 4. **Watch it live:** `python watch_training.py base 42` in a second terminal.
 5. **Compare runs:** `summarize_results` (in `patchvision/experiment.py`, used by `training.ipynb`) writes `results/ablation_table.md`; `compare_runs` (used by `overfitting_trials.ipynb`) writes `results/overfitting_trials/comparison.*`.

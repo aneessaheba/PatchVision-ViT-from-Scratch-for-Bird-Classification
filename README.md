@@ -431,6 +431,10 @@ python train.py ovf1_droppath0.3 42
 python train.py cnn_small 42
 python train.py cnn_large 42
 
+# these commands train and pick the best epoch on validation; the test set is not read
+# add --final-test to evaluate it, for example: python train.py cnn_large 42 --final-test
+# a finished training is reused, not repeated
+
 # rebuild every figure and animation on this page (from the repo root)
 python assets/make_assets.py
 ```
