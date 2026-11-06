@@ -81,7 +81,7 @@ Three seeds give limited power, so every comparison reports the per-seed differe
 
 - [x] Turn early stopping off for all models
 - [x] Make saved predictions and reported accuracy use the same top-1 result
-- [ ] Commit an environment file and record the Docker image
+- [x] Commit an environment file and record the Docker image, in `requirements-5090.txt`
 - [ ] Finish the GvT code comparison and literature review
 
 ## 8. Deviation log
