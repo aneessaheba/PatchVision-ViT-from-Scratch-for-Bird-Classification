@@ -8,6 +8,10 @@ that needs attention maps (box-attention loss, flip-consistency loss, attention 
     config.json  env.json  train_log.txt  steps.csv  history.csv  curves.png
     val_reports/epoch_XXX_{per_class.csv,confusion.npy}      weights/epoch_XXX.pt
     best_model.pt  last.pt  (resumable: run the same command again after an interruption)
+    val_metrics.json  (summary of a finished run, validation numbers only)
+
+and only when run_test=True:
+
     test_metrics.json  test_per_class.csv  test_confusion_matrix.{npy,png}  test_predictions.csv
     test_reliability.{png,csv}
 
@@ -67,9 +71,10 @@ def evaluate(model, loader, device, num_classes: int, amp: tuple, collect: bool 
 
 class CNNTrainer:
     def __init__(self, exp: CNNExperiment, paths: PathsConfig, device: Optional[torch.device] = None,
-                 num_workers: int = 4, step_print_every: int = 1, resume: bool = True, quiet: bool = False):
+                 num_workers: int = 4, step_print_every: int = 1, resume: bool = True, quiet: bool = False,
+                 run_test: bool = False):
         self.exp = copy.deepcopy(exp)
-        self.paths, self.resume, self.quiet = paths, resume, quiet
+        self.paths, self.resume, self.quiet, self.run_test = paths, resume, quiet, run_test
         self.device = device or get_device()
         self.num_workers, self.step_print_every = num_workers, step_print_every
         self.run_dir = paths.results / exp.name / f"seed{exp.seed}"
@@ -80,9 +85,22 @@ class CNNTrainer:
         if self.resume and done.exists():
             print(f"[{self.exp.name} | seed {self.exp.seed}] already finished -> loading {done}")
             return json.loads(done.read_text())["row"]
+        val_done = self.run_dir / "val_metrics.json"
+        if self.resume and val_done.exists():
+            row = json.loads(val_done.read_text())["row"]
+            if not self.run_test:
+                print(f"[{self.exp.name} | seed {self.exp.seed}] already trained -> loading {val_done}")
+                return row
+            for name in ("last.pt", "best_model.pt"):
+                if not (self.run_dir / name).exists():
+                    raise FileNotFoundError(f"{self.run_dir / name} is needed to run the test without retraining")
+            self._setup()
+            self.epochs_run, self.train_time_s = row["epochs_run"], row["train_time_s"]
+            self.stopped_early = row["stopped_early"]
+            return self._final_test()
         self._setup()
         self._train_loop()
-        return self._final_test()
+        return self._final_test() if self.run_test else self._finish_validation_only()
 
     # ------------------------------------------------------------------ setup
     def _setup(self):
@@ -324,6 +342,27 @@ class CNNTrainer:
             rd / "val_reports" / f"epoch_{epoch:03d}_per_class.csv", index=False)
         np.save(rd / "val_reports" / f"epoch_{epoch:03d}_confusion.npy", va_trk.conf.numpy())
 
+    # ------------------------------------------------------------------ summary
+    def _validation_row(self) -> dict:
+        exp, tc = self.exp, self.exp.train
+        hist = pd.DataFrame(self.history)
+        best_row = hist[hist["epoch"] == self.best_epoch].iloc[0]
+        clean_rows = hist.dropna(subset=["clean_acc1"])
+        near = clean_rows.iloc[(clean_rows["epoch"] - self.best_epoch).abs().argsort()[:1]]
+        gap = float(near["clean_acc1"].iloc[0] - near["val_acc1"].iloc[0]) if len(near) else float("nan")
+        return {"experiment": exp.name, "seed": exp.seed, "best_epoch": self.best_epoch, "epochs_run": self.epochs_run,
+                "stopped_early": self.stopped_early, "train_time_s": self.train_time_s,
+                "sec_per_epoch": self.train_time_s / max(1, self.epochs_run),
+                f"best_val_{tc.best_metric}": self.best, "val_acc1_at_best": float(best_row["val_acc1"]),
+                "overfit_gap_clean_minus_val": gap}
+
+    def _finish_validation_only(self) -> dict:
+        row = {**self._validation_row(), "params_M": self.n_params / 1e6, "run_dir": str(self.run_dir)}
+        save_json({"row": row, "config": self.exp.to_dict(), "env": env_info()}, self.run_dir / "val_metrics.json")
+        self.log(f"\nTRAINING DONE. Best epoch {self.best_epoch}, val {self.exp.train.best_metric} {self.best:.4f}. "
+                 f"Test set not evaluated.\nSaved everything to {self.run_dir}")
+        return row
+
     # ------------------------------------------------------------------ test
     def _final_test(self) -> dict:
         exp, tc, rd, log = self.exp, self.exp.train, self.run_dir, self.log
@@ -362,15 +401,7 @@ class CNNTrainer:
         pairs = [(names[i // nc], names[i % nc], int(v)) for v, i in zip(top.values, top.indices) if v > 0]
         log("most frequent confusions (true -> predicted : count):\n" + "\n".join(f"  {a} -> {b} : {n}" for a, b, n in pairs))
 
-        best_row = hist[hist["epoch"] == self.best_epoch].iloc[0]
-        clean_rows = hist.dropna(subset=["clean_acc1"])
-        near = clean_rows.iloc[(clean_rows["epoch"] - self.best_epoch).abs().argsort()[:1]]
-        gap = float(near["clean_acc1"].iloc[0] - near["val_acc1"].iloc[0]) if len(near) else float("nan")
-        row = {"experiment": exp.name, "seed": exp.seed, "best_epoch": self.best_epoch, "epochs_run": self.epochs_run,
-               "stopped_early": self.stopped_early, "train_time_s": self.train_time_s,
-               "sec_per_epoch": self.train_time_s / max(1, self.epochs_run),
-               f"best_val_{tc.best_metric}": self.best, "val_acc1_at_best": float(best_row["val_acc1"]),
-               "overfit_gap_clean_minus_val": gap,
+        row = {**self._validation_row(),
                "test_acc1": te["acc1"], "test_acc5": te["acc5"], "test_macro_f1": te["macro_f1"],
                "test_macro_precision": te["macro_precision"], "test_macro_recall": te["macro_recall"],
                "test_weighted_f1": te["weighted_f1"], "test_loss": te["loss"], "test_ece": te.get("ece", float("nan")),

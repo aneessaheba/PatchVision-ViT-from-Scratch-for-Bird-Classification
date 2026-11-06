@@ -170,8 +170,9 @@ def compare_runs(paths: PathsConfig, names: Sequence[str], seed: int = 42, out_n
         best = h.loc[h["val_acc1"].idxmax()]
         lo = h.loc[h["val_loss"].idxmin()]
         clean_at_best, gap_at_best = _nearest_clean_gap(h, int(best["epoch"]))
-        done = (rd / "test_metrics.json").exists()
-        row = json.loads((rd / "test_metrics.json").read_text())["row"] if done else {}
+        summary = next((rd / f for f in ("test_metrics.json", "val_metrics.json") if (rd / f).exists()), None)
+        done = summary is not None
+        row = json.loads(summary.read_text())["row"] if done else {}
         rows.append({
             "run": n, "finished": done, "epochs_run": int(h["epoch"].max()),
             "best_val_acc1": float(best["val_acc1"]), "best_val_epoch": int(best["epoch"]),
