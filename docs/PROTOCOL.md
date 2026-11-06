@@ -79,8 +79,8 @@ Three seeds give limited power, so every comparison reports the per-seed differe
 
 ## 7. Required before the first new run
 
-- [ ] Turn early stopping off for all models, since the default patience is still 60
-- [ ] Make saved predictions and reported accuracy use the same top-1 result
+- [x] Turn early stopping off for all models
+- [x] Make saved predictions and reported accuracy use the same top-1 result
 - [ ] Commit an environment file and record the Docker image
 - [ ] Finish the GvT code comparison and literature review
 
