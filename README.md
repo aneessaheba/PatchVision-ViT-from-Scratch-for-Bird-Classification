@@ -412,7 +412,7 @@ The fair headline comparison is still the one in [section 1](#1-the-result-in-on
 - **Small validation set.** 600 photos (3 per species) is a noisy yardstick for picking the best epoch and for comparing the trials.
 - **Test set seen.** We have looked at test results for all runs. Decisions after this point should be made on validation only.
 - **Not the proposal's plain ViT.** The proposal described a textbook ViT (6 blocks, 384 dimensions, class token). We built the stronger PatchVision-X hybrid instead; the `base` run is the nearest "plain" reference but still uses the conv tokenizer and graph attention. The deviation is documented in [`ViT_PatchVisionX/README.md`](ViT_PatchVisionX/README.md#differences-from-the-original-project-proposal).
-- **Unverified GvT detail.** The graph-attention parts follow our reading of an under-specified paper and were not checked line by line against it.
+- **GvT-style, not GvT.** The attention follows the paper's main equations, but the model is much larger, adds MLP blocks, and interprets two parts of the paper. Details: [`docs/GVT_COMPARISON.md`](docs/GVT_COMPARISON.md).
 
 ---
 

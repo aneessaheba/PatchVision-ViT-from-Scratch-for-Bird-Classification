@@ -208,7 +208,7 @@ We did not copy a model. We took useful ideas from two papers, and wrote the cod
 | What we took | The convolutional tokenizer, graph attention, a "sparse gate" that can switch off useless links, and graph pooling (merging 196 tokens into 49). | The **Local Feature Extraction block** (a small depthwise convolution that replaces the usual position numbers), and the **multi-scale** idea. |
 | What we changed | Some details of the paper are unclear, so we chose an interpretation (marked "INTERPRETATION" in `patchvision/models.py`). | We did **not** use MSCViT's wavelet convolution or its four-stage layout. We rebuilt its multi-scale idea on the graph (next section). |
 
-> **Honest note.** We read the method and experiment-setup parts of the MSCViT paper, but the Nature page for the GvT paper only opened a login page, so our GvT implementation follows the notes we already had in the earlier code. We have **not** compared it line by line against the paper's equations. Treat our `base` model as a GvT-*style* model, not a verified reproduction.
+> **Honest note.** Our `base` model is a GvT-*style* model, not a reproduction: it follows the paper's main attention equations, but it is much larger, adds MLP blocks, and interprets two parts of the paper. See [`docs/GVT_COMPARISON.md`](../docs/GVT_COMPARISON.md).
 
 ---
 
@@ -552,7 +552,7 @@ Cheap regularisation helps a little, but it is not the answer to memorizing on i
 * **`full` is worse calibrated** than `base`, and most trials are worse still (ECE up to 10.8 %).
 * **`full` is slower to train** (20 against 12 seconds per epoch) because of the mirrored copies.
 * **We have looked at the test results of all six runs.** To keep the final test grade honest, every further choice should be made on the validation photos only, and the test set should be used for the final runs only.
-* The GvT parts of our code follow our interpretation of an under-specified paper ([section 6](#6-the-two-papers-we-built-on)).
+* Two GvT parts of our code are interpretations of the paper ([comparison](../docs/GVT_COMPARISON.md)).
 
 ---
 
