@@ -2,10 +2,13 @@
 
     python train.py                 -> experiment "full", seed 42
     python train.py base 42         -> experiment "base", seed 42
+    python train.py base 42 --final-test   -> also evaluate the test set; reuses a finished training
 
-Experiment names are the keys of patchvision.config.ablation_suite() or patchvision.config.overfit_trials().
+Experiment names are the keys of patchvision.config.ablation_suite(), overfit_trials(), combined_trials() or
+architecture_trials(). Without --final-test the test set is not read, so development runs stay on validation data.
 Everything is written to ViT_PatchVisionX/results/<experiment>/seed<seed>/ ; re-running resumes an interrupted run.
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -18,9 +21,12 @@ from patchvision.config import (PathsConfig, architecture_trials, combined_trial
 from patchvision.experiment import run_experiment
 
 if __name__ == "__main__":
-    name = sys.argv[1] if len(sys.argv) > 1 else "full"
-    seed = int(sys.argv[2]) if len(sys.argv) > 2 else 42
+    parser = argparse.ArgumentParser(description="Train one PatchVision experiment.")
+    parser.add_argument("name", nargs="?", default="full")
+    parser.add_argument("seed", nargs="?", type=int, default=42)
+    parser.add_argument("--final-test", action="store_true", help="evaluate the test set after training")
+    args = parser.parse_args()
     paths = PathsConfig(root=str(ROOT), results_dir="ViT_PatchVisionX/results")
-    exp = (get_trial(name, seed) if name in {**overfit_trials(), **combined_trials(), **architecture_trials()}
-           else get_experiment(name, seed=seed))
-    run_experiment(exp, paths, num_workers=6, step_print_every=1, resume=True)
+    exp = (get_trial(args.name, args.seed) if args.name in {**overfit_trials(), **combined_trials(), **architecture_trials()}
+           else get_experiment(args.name, seed=args.seed))
+    run_experiment(exp, paths, num_workers=6, step_print_every=1, resume=True, run_test=args.final_test)
