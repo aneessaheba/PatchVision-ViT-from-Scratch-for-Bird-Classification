@@ -1,0 +1,68 @@
+{
+  "name": "ovf5_dp0.3_autoaug",
+  "seed": 42,
+  "model": {
+    "img_size": 224,
+    "num_classes": 200,
+    "embed_dim": 256,
+    "depth": 8,
+    "heads": 8,
+    "mlp_ratio": 3.0,
+    "drop": 0.0,
+    "attn_drop": 0.0,
+    "drop_path": 0.3,
+    "tok_groups": 4,
+    "pool_after": null,
+    "pool_ratio": 4,
+    "adj_mode": "hadamard",
+    "use_sparse_gate": true,
+    "use_lfe": true,
+    "keep_abs_pos": false,
+    "use_multiscale": true,
+    "scales": [
+      1,
+      2,
+      4,
+      0
+    ],
+    "restrict_attention": false
+  },
+  "train": {
+    "epochs": 300,
+    "batch_size": 64,
+    "lr": 0.0005,
+    "min_lr": 1e-06,
+    "warmup_epochs": 10,
+    "weight_decay": 0.05,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "grad_clip": 1.0,
+    "label_smoothing": 0.1,
+    "amp": true,
+    "aug_tier": "auto",
+    "use_mixup_cutmix": true,
+    "use_bbox_loss": true,
+    "bbox_weight": 0.1,
+    "use_ema": true,
+    "ema_decay": 0.999,
+    "use_consistency": true,
+    "cons_logit_weight": 1.0,
+    "cons_attn_weight": 1.0,
+    "use_box_crop": true,
+    "box_crop_prob": 0.3,
+    "box_crop_margin": [
+      0.1,
+      0.4
+    ],
+    "best_metric": "acc1",
+    "early_stop_patience": 0,
+    "early_stop_start": 30,
+    "clean_eval_every": 5,
+    "clean_eval_size": 600,
+    "snapshot_every": 10,
+    "weights_every": 50,
+    "plot_every": 10
+  }
+}
