@@ -108,7 +108,8 @@ class TrainConfig:
 
     # --- model selection / stopping ---
     best_metric: str = "acc1"         # acc1 | macro_f1 | loss  (selected on VALIDATION only)
-    early_stop_patience: int = 60     # epochs without validation improvement (0 = off)
+    early_stop_patience: int = 0      # epochs without validation improvement (0 = off). Off under docs/PROTOCOL.md;
+                                      # runs recorded before the protocol used 60 unless their config.json says otherwise
     early_stop_start: int = 30        # never stop before this epoch
 
     # --- what gets recorded ---
