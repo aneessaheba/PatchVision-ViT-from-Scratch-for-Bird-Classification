@@ -68,7 +68,8 @@ def evaluate(model, loader, device, grid: int, num_classes: int, amp: tuple, col
                        area=pmask.sum(1) / pmask.shape[1],
                        gate=(aux["gate_mean"].item(), aux["gate_sparsity"].item()))
         if collect:
-            conf, pred = torch.softmax(logits, -1).max(1)
+            conf = torch.softmax(logits, -1).max(1).values
+            pred = logits.topk(1, dim=1).indices.squeeze(1)      # same choice as MetricTracker when scores tie
             rows.append(pd.DataFrame({"image_id": iid.numpy(), "label": y.cpu().numpy(), "pred": pred.cpu().numpy(),
                                       "confidence": conf.cpu().numpy()}))
     res = tracker.compute()
