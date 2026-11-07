@@ -105,6 +105,9 @@ class TrainConfig:
     use_box_crop: bool = True         # R4: bird-box-guided crop augmentation (training-time only)
     box_crop_prob: float = 0.3
     box_crop_margin: Tuple[float, float] = (0.1, 0.4)
+    use_part_guidance: bool = False   # CUB part keypoints supervise the first pooling queries (training-time only)
+    part_weight: float = 0.1
+    part_fraction: float = 1.0        # share of training images whose keypoints may be used
 
     # --- model selection / stopping ---
     best_metric: str = "acc1"         # acc1 | macro_f1 | loss  (selected on VALIDATION only)
@@ -240,6 +243,31 @@ def architecture_trials() -> Dict[str, Dict[str, Any]]:
     }
 
 
+def guidance_trials() -> Dict[str, Dict[str, Any]]:
+    """The study in docs/PROTOCOL.md: which training-only annotations help, all on the ovf5 regularisation recipe.
+    g_keypoints_f<share> uses keypoints from only that share of the training images."""
+    recipe, no_box = {"aug_tier": "auto"}, {"use_bbox_loss": False, "use_box_crop": False}
+    model = {"drop_path": 0.3}
+    trials = {
+        "g_none": {"base": "full", "model": model, "train": {**recipe, **no_box}, "change": "no annotations"},
+        "g_box": {"base": "full", "model": model, "train": recipe, "change": "bird boxes"},
+        "g_keypoints": {"base": "full", "model": model, "train": {**recipe, **no_box, "use_part_guidance": True},
+                        "change": "part keypoints"},
+        "g_both": {"base": "full", "model": model, "train": {**recipe, "use_part_guidance": True},
+                   "change": "bird boxes and part keypoints"},
+    }
+    for share in (0.005, 0.01, 0.05, 0.1):
+        trials[f"g_keypoints_f{share}"] = {
+            "base": "full", "model": model,
+            "train": {**recipe, **no_box, "use_part_guidance": True, "part_fraction": share},
+            "change": f"part keypoints on {share:.1%} of training images"}
+    return trials
+
+
+def all_trials() -> Dict[str, Dict[str, Any]]:
+    return {**overfit_trials(), **combined_trials(), **architecture_trials(), **guidance_trials()}
+
+
 def get_trial(name: str, seed: int = 42) -> ExperimentConfig:
-    spec = {**overfit_trials(), **combined_trials(), **architecture_trials()}[name]
+    spec = all_trials()[name]
     return get_experiment(spec["base"], seed, spec["model"], spec["train"], run_name=name)

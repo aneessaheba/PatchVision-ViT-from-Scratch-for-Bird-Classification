@@ -32,7 +32,7 @@ import torch
 import torch.nn.functional as F
 
 from .config import ExperimentConfig, PathsConfig
-from .data import MixupCutmix, build_loaders, load_data_info
+from .data import MixupCutmix, build_loaders, flip_part_points, load_data_info
 from .losses import BBoxAttentionLoss, TrainingLoss, smooth_one_hot
 from .metrics import MetricTracker, box_to_patch_mask, measure_efficiency
 from .models import TOKENIZER_STRIDE, build_model
@@ -191,7 +191,7 @@ class Trainer:
         model.train()
         tracker = MetricTracker(self.info.num_classes)
         n_steps, t_epoch = len(loader), time.time()
-        sums = {k: 0.0 for k in ("total", "ce", "attn", "cons_logit", "cons_attn")}
+        sums = {k: 0.0 for k in ("total", "ce", "attn", "cons_logit", "cons_attn", "part", "part_error")}
         gnorm_sum = data_time = 0.0
         skipped = 0
         lr_first = self.opt.param_groups[0]["lr"]
@@ -199,18 +199,26 @@ class Trainer:
             torch.cuda.reset_peak_memory_stats()
         two = tc.use_consistency
         t_prev = time.time()
-        for step, (x, m, y, _) in enumerate(loader, 1):
+        for step, batch in enumerate(loader, 1):
+            x, m, y = batch[0], batch[1], batch[2]
             t_data = time.time() - t_prev
             t0 = time.time()
             x, m, y = x.to(dev, non_blocking=True), m.to(dev, non_blocking=True), y.to(dev, non_blocking=True)
+            points = batch[4].to(dev, non_blocking=True) if tc.use_part_guidance else None
             if self.mixer is not None:
-                x, soft, m, mixinfo = self.mixer(x, y, m)
+                x, soft, m, mixinfo = self.mixer(x, y, m, points=points)
             else:
                 soft, mixinfo = smooth_one_hot(y, self.info.num_classes, tc.label_smoothing), {"type": "none", "lam": 1.0}
+                if points is not None:
+                    mixinfo.update(points=points, point_weight=x.new_ones(x.shape[0]))
+            part_points, part_weights = mixinfo.pop("points", None), mixinfo.pop("point_weight", None)
             hard = soft.argmax(1)                                 # dominant label (approximate train accuracy)
             B = x.shape[0]
             if two:                                               # R3: second view = horizontal flip
                 x_in, m_in = torch.cat([x, x.flip(-1)]), torch.cat([m, m.flip(-1)])
+                if part_points is not None:
+                    part_points = torch.cat([part_points, flip_part_points(part_points, self.ds["train"].parts.flip_order)])
+                    part_weights = torch.cat([part_weights, part_weights])
             else:
                 x_in, m_in = x, m
             pmask = box_to_patch_mask(m_in, self.grid)
@@ -218,7 +226,8 @@ class Trainer:
             lr_now = self.opt.param_groups[0]["lr"]
             with torch.autocast(dev.type, dtype=self.amp_dtype, enabled=self.use_amp):
                 logits, aux = model(x_in)
-            out = self.criterion(logits.float(), soft, aux, pmask, two_views=two)
+            out = self.criterion(logits.float(), soft, aux, pmask, two_views=two, part_points=part_points,
+                                 part_weights=part_weights)
             if not torch.isfinite(out["total"]):
                 skipped += 1
                 log(f"  !! step {step}: non-finite loss ({out['total'].item()}) -> step skipped")
@@ -275,7 +284,7 @@ class Trainer:
             t_prev = time.time()
         res = tracker.compute()
         n = max(1, n_steps - skipped)
-        res.update({k: sums[k] / n for k in ("ce", "attn", "cons_logit", "cons_attn")})
+        res.update({k: sums[k] / n for k in ("ce", "attn", "cons_logit", "cons_attn", "part", "part_error")})
         res.update({"gnorm": gnorm_sum / n, "lr_first": lr_first, "lr_last": self.opt.param_groups[0]["lr"],
                     "time_s": time.time() - t_epoch, "data_wait_frac": data_time / max(1e-9, time.time() - t_epoch),
                     "skipped": skipped})
