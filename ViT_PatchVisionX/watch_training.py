@@ -11,4 +11,4 @@ from patchvision.monitor import watch
 if __name__ == "__main__":
     exp = sys.argv[1] if len(sys.argv) > 1 else "full"
     seed = sys.argv[2] if len(sys.argv) > 2 else "42"
-    watch(ROOT / "results" / exp / f"seed{seed}", interval=2.0, rows=15)
+    watch(ROOT / "results_protocol" / exp / f"seed{seed}", interval=2.0, rows=15)
