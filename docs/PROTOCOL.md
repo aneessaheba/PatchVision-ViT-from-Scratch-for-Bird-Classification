@@ -18,6 +18,7 @@ How much do training-only annotations (boxes and part keypoints) help a small Vi
 | Best epoch | Highest validation top-1; the earliest epoch wins a tie |
 | Seeds | 42, 43 and 44 |
 | Traceability | Every run records its config, environment and git commit |
+| Results folder | New runs go in `results_protocol/`, apart from the earlier runs in `results/` |
 
 The same seed does not give an exact repeat. Two runs of `ovf5_dp0.3_autoaug` with seed 42 gave 53.00% and 53.87% test top-1.
 

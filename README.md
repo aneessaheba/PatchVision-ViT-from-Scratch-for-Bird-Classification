@@ -434,6 +434,7 @@ python train.py cnn_large 42
 # these commands train and pick the best epoch on validation; the test set is not read
 # add --final-test to evaluate it, for example: python train.py cnn_large 42 --final-test
 # a finished training is reused, not repeated
+# new runs are written to results_protocol/, so the earlier runs in results/ stay untouched
 # early stopping is now off by default; recorded runs before docs/PROTOCOL.md used patience 60 unless their config.json says otherwise
 
 # rebuild every figure and animation on this page (from the repo root)
