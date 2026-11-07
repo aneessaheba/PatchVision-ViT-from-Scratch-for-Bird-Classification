@@ -65,6 +65,77 @@ def load_bboxes(path: Optional[os.PathLike]) -> Optional[Dict[int, Tuple[float, 
     return boxes
 
 
+@dataclass
+class PartAnnotations:
+    """CUB part keypoints. points: {image_id: (P, 3) array of x, y, visible} in original image pixels.
+    flip_order[i] is the part that part i becomes when the image is mirrored (left eye <-> right eye)."""
+    names: List[str]
+    flip_order: List[int]
+    points: Dict[int, np.ndarray]
+
+
+def load_part_annotations(cub_root: os.PathLike) -> PartAnnotations:
+    """Reads CUB's parts/parts.txt and parts/part_locs.txt. Used only as a training signal, never as model input."""
+    parts_dir = Path(cub_root) / "parts"
+    names = []
+    for line in (parts_dir / "parts.txt").read_text().splitlines():
+        if line.strip():
+            names.append(line.split(maxsplit=1)[1].strip())
+    index = {name: i for i, name in enumerate(names)}
+    flip_order = []
+    for name in names:
+        if name.startswith("left "):
+            flip_order.append(index["right " + name[len("left "):]])
+        elif name.startswith("right "):
+            flip_order.append(index["left " + name[len("right "):]])
+        else:
+            flip_order.append(index[name])
+    points: Dict[int, np.ndarray] = {}
+    for line in (parts_dir / "part_locs.txt").read_text().splitlines():
+        if not line.strip():
+            continue
+        image_id, part_id, x, y, visible = line.split()
+        row = points.setdefault(int(image_id), np.zeros((len(names), 3), dtype=np.float32))
+        row[int(part_id) - 1] = (float(x), float(y), float(visible))
+    return PartAnnotations(names, flip_order, points)
+
+
+def paint_part_map(points: np.ndarray, offset: Tuple[int, int], width: int, height: int) -> torch.Tensor:
+    """(1, H, W) uint8 map: a small disk with value part_index + 1 at each visible part. Going through the same
+    geometric transforms as the image keeps every part on the correct pixels; later parts overwrite earlier ones."""
+    part_map = torch.zeros(1, height, width, dtype=torch.uint8)
+    radius = max(3, round(0.012 * max(width, height)))
+    for i, (x, y, visible) in enumerate(points):
+        cx, cy = x - offset[0], y - offset[1]
+        if visible <= 0 or not (0 <= cx < width and 0 <= cy < height):
+            continue
+        x0, x1 = max(0, int(cx) - radius), min(width, int(cx) + radius + 1)
+        y0, y1 = max(0, int(cy) - radius), min(height, int(cy) + radius + 1)
+        ys, xs = torch.meshgrid(torch.arange(y0, y1), torch.arange(x0, x1), indexing="ij")
+        disk = (xs - cx) ** 2 + (ys - cy) ** 2 <= radius ** 2
+        part_map[0, y0:y1, x0:x1][disk] = i + 1
+    return part_map
+
+
+def part_points_from_map(part_map: torch.Tensor, num_parts: int) -> torch.Tensor:
+    """(H, W) part map -> (P, 3) tensor of x, y in [0, 1] and visible. A part cropped out of the image is not visible."""
+    height, width = part_map.shape
+    out = torch.zeros(num_parts, 3)
+    for i in range(num_parts):
+        ys, xs = torch.nonzero(part_map == i + 1, as_tuple=True)
+        if len(xs):
+            out[i] = torch.stack([(xs.float().mean() + 0.5) / width, (ys.float().mean() + 0.5) / height,
+                                  torch.tensor(1.0)])
+    return out
+
+
+def flip_part_points(points: torch.Tensor, flip_order: Sequence[int]) -> torch.Tensor:
+    """Part points of a mirrored image: (..., P, 3) -> mirrored x, with left and right parts swapped."""
+    out = points[..., list(flip_order), :].clone()
+    out[..., 0] = torch.where(out[..., 2] > 0, 1.0 - out[..., 0], out[..., 0])
+    return out
+
+
 def load_data_info(paths: PathsConfig) -> DataInfo:
     prep = paths.prep
     for name in ("preprocess_config.json", "norm_stats.json", "train.csv", "val.csv", "test.csv"):
@@ -109,23 +180,43 @@ class MaskAwareTrivialAugmentWide(T.TrivialAugmentWide):
         return img, mask
 
 
-def build_transforms(tier: str, img_size: int, mean: Sequence[float], std: Sequence[float], train: bool):
+class PartAwareHorizontalFlip(torch.nn.Module):
+    """Random mirror that also relabels left and right parts in channel 1 of the mask. Uses the same random draw
+    as T.RandomHorizontalFlip, so the augmented images do not change."""
+
+    def __init__(self, flip_order: Sequence[int], p: float = 0.5):
+        super().__init__()
+        self.p = p
+        self.lookup = torch.tensor([0] + [i + 1 for i in flip_order], dtype=torch.uint8)
+
+    def forward(self, img, mask):
+        if torch.rand(1) >= self.p:
+            return img, mask
+        img, mask = T.functional.horizontal_flip(img), T.functional.horizontal_flip(mask)
+        data = torch.as_tensor(mask).clone()
+        data[1] = self.lookup[data[1].long()]
+        return img, tv_tensors.Mask(data)
+
+
+def build_transforms(tier: str, img_size: int, mean: Sequence[float], std: Sequence[float], train: bool,
+                     part_flip_order: Optional[Sequence[int]] = None):
     size = (img_size, img_size)
+    flip = PartAwareHorizontalFlip(part_flip_order) if part_flip_order is not None else T.RandomHorizontalFlip(0.5)
     to_float = T.ToDtype({tv_tensors.Image: torch.float32, tv_tensors.Mask: torch.float32, "others": None},
                          scale=True)
     norm = T.Normalize(mean=list(mean), std=list(std))
     if not train or tier == "none":
         return T.Compose([T.Resize(size, antialias=True), to_float, norm])
     if tier == "basic":
-        ops = [T.RandomResizedCrop(size, scale=(0.5, 1.0), antialias=True), T.RandomHorizontalFlip(0.5),
+        ops = [T.RandomResizedCrop(size, scale=(0.5, 1.0), antialias=True), flip,
                to_float, norm]
     elif tier == "strong":
-        ops = [T.RandomResizedCrop(size, scale=(0.35, 1.0), antialias=True), T.RandomHorizontalFlip(0.5),
+        ops = [T.RandomResizedCrop(size, scale=(0.35, 1.0), antialias=True), flip,
                T.RandomAffine(degrees=10, translate=(0.05, 0.05), scale=(0.9, 1.1)),
                T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.0),
                to_float, norm, T.RandomErasing(p=0.25)]
     elif tier == "auto":
-        ops = [T.RandomResizedCrop(size, scale=(0.35, 1.0), antialias=True), T.RandomHorizontalFlip(0.5),
+        ops = [T.RandomResizedCrop(size, scale=(0.35, 1.0), antialias=True), flip,
                MaskAwareTrivialAugmentWide(), to_float, norm, T.RandomErasing(p=0.25)]
     else:
         raise ValueError(f"unknown augmentation tier {tier!r}")
@@ -139,6 +230,8 @@ class CUBDataset(Dataset):
     """
     Reads train/val/test.csv (columns: image_id, filepath, label, class_name).
     Returns (image[3,H,W] normalised, bird_mask[1,H,W] in [0,1], label, image_id).
+    With `parts`, also returns part points: (P, 3) with x, y in [0, 1] and visible, after all augmentation. The
+    transform must then be built with part_flip_order=parts.flip_order.
 
     The csv paths look like 'data/CUB_200_2011/images/...'; only the part after 'CUB_200_2011/' is used and it is
     joined to `cub_root`, so it does not matter where the dataset folder lives.
@@ -148,7 +241,9 @@ class CUBDataset(Dataset):
     """
 
     def __init__(self, csv_path, transform, bboxes, cub_root: os.PathLike, train: bool = False,
-                 box_crop_prob: float = 0.0, box_crop_margin: Tuple[float, float] = (0.1, 0.4)):
+                 box_crop_prob: float = 0.0, box_crop_margin: Tuple[float, float] = (0.1, 0.4),
+                 parts: Optional[PartAnnotations] = None):
+        self.parts = parts
         df = pd.read_csv(csv_path)
         self.records = df.to_dict("records")
         self.transform, self.bboxes, self.cub_root = transform, bboxes, Path(cub_root)
@@ -169,6 +264,7 @@ class CUBDataset(Dataset):
         img = Image.open(self.image_path(i)).convert("RGB")
         w, h = img.size
         box = self.bboxes.get(int(r["image_id"])) if self.bboxes is not None else None
+        offset = (0, 0)
         if box is not None:
             x, y, bw, bh = box
             if self.train and self.box_crop_prob > 0 and random.random() < self.box_crop_prob:
@@ -178,6 +274,7 @@ class CUBDataset(Dataset):
                 if cx1 - cx0 > 8 and cy1 - cy0 > 8:
                     img = img.crop((cx0, cy0, cx1, cy1))
                     x, y = x - cx0, y - cy0
+                    offset = (cx0, cy0)
                     w, h = img.size
             mask = torch.zeros(1, h, w, dtype=torch.uint8)
             x0, y0 = max(0, int(round(x))), max(0, int(round(y)))
@@ -186,8 +283,16 @@ class CUBDataset(Dataset):
         else:
             mask = torch.zeros(1, h, w, dtype=torch.uint8)
         img_t = tv_tensors.Image(T.functional.pil_to_tensor(img))
-        img_t, mask_t = self.transform(img_t, tv_tensors.Mask(mask))
-        return img_t, torch.as_tensor(mask_t).float().clamp_(0, 1), int(r["label"]), int(r["image_id"])
+        if self.parts is None:
+            img_t, mask_t = self.transform(img_t, tv_tensors.Mask(mask))
+            return img_t, torch.as_tensor(mask_t).float().clamp_(0, 1), int(r["label"]), int(r["image_id"])
+        num_parts = len(self.parts.names)
+        points = self.parts.points.get(int(r["image_id"]), np.zeros((num_parts, 3), dtype=np.float32))
+        stacked = torch.cat([mask, paint_part_map(points, offset, w, h)])
+        img_t, mask_t = self.transform(img_t, tv_tensors.Mask(stacked))
+        mask_t = torch.as_tensor(mask_t).float()
+        return (img_t, mask_t[:1].clamp_(0, 1), int(r["label"]), int(r["image_id"]),
+                part_points_from_map(mask_t[1], num_parts))
 
 
 class MixupCutmix:
