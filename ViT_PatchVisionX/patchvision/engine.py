@@ -34,7 +34,7 @@ import torch.nn.functional as F
 from .config import ExperimentConfig, PathsConfig
 from .data import MixupCutmix, build_loaders, flip_part_points, load_data_info
 from .losses import BBoxAttentionLoss, TrainingLoss, smooth_one_hot
-from .metrics import MetricTracker, box_to_patch_mask, measure_efficiency
+from .metrics import MetricTracker, box_to_patch_mask, measure_efficiency, part_localization
 from .models import TOKENIZER_STRIDE, build_model
 from .optim import build_optimizer, build_scheduler
 from .regularization import EarlyStopping, ModelEMA
@@ -315,9 +315,16 @@ class Trainer:
                 self.best, self.best_epoch = score, epoch
                 torch.save({"exp": self.exp.to_dict(), "epoch": epoch, "state": self.eval_model.state_dict(),
                             "uses_ema": self.ema is not None, "val": va}, rd / "best_model.pt")
+                np.save(rd / "best_val_confusion.npy", va_trk.conf.numpy())
             stop = self.stopper.step(score, epoch)
+            parts = {}
+            if tc.track_part_localization and (improved or epoch % tc.snapshot_every == 0 or stop or epoch == tc.epochs):
+                found = part_localization(self.eval_model, self.dl["val_parts"], self.device, self.grid, self.amp)
+                parts = {"val_part_error_assigned": found["assigned"], "val_part_error_best": found["best"]}
+                log(f"  PARTS  distance to part points: assigned queries {found['assigned']:.4f} | "
+                    f"best queries {found['best']:.4f} (share of image width)")
 
-            rec = {"epoch": epoch, **{f"train_{k}": v for k, v in tr.items()}, **{f"val_{k}": v for k, v in va.items()},
+            rec = {"epoch": epoch, **parts, **{f"train_{k}": v for k, v in tr.items()}, **{f"val_{k}": v for k, v in va.items()},
                    "valraw_acc1": va_raw["acc1"] if va_raw else np.nan, "valraw_loss": va_raw["loss"] if va_raw else np.nan,
                    "clean_acc1": clean["acc1"] if clean else np.nan, "clean_loss": clean["loss"] if clean else np.nan,
                    "gap_acc1": tr["acc1"] - va["acc1"], "is_best": improved}

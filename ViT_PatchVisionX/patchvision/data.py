@@ -401,6 +401,9 @@ def build_loaders(info: DataInfo, tc: TrainConfig, seed: int, num_workers: int, 
     ds["train_clean"] = Subset(clean_full, np.linspace(0, len(clean_full) - 1, n_clean).astype(int).tolist())
     ds["train_clean"].class_names = clean_full.class_names
 
+    if tc.track_part_localization:
+        ds["val_parts"] = CUBDataset(info.val_csv, ev_tf, info.bboxes, info.cub_root,
+                                     parts=load_part_annotations(info.cub_root))
     g = torch.Generator()
     g.manual_seed(seed)
     kw = dict(num_workers=num_workers, pin_memory=pin_memory, worker_init_fn=seed_worker if num_workers else None)
@@ -411,6 +414,8 @@ def build_loaders(info: DataInfo, tc: TrainConfig, seed: int, num_workers: int, 
           "val": DataLoader(ds["val"], bs, shuffle=False, **kw),
           "test": DataLoader(ds["test"], bs, shuffle=False, **kw),
           "train_clean": DataLoader(ds["train_clean"], bs, shuffle=False, **kw)}
+    if "val_parts" in ds:
+        dl["val_parts"] = DataLoader(ds["val_parts"], bs, shuffle=False, **kw)
     return ds, dl
 
 

@@ -108,6 +108,7 @@ class TrainConfig:
     use_part_guidance: bool = False   # CUB part keypoints supervise the first pooling queries (training-time only)
     part_weight: float = 0.1
     part_fraction: float = 1.0        # share of training images whose keypoints may be used
+    track_part_localization: bool = False   # measure part localization on validation images (never used for training)
 
     # --- model selection / stopping ---
     best_metric: str = "acc1"         # acc1 | macro_f1 | loss  (selected on VALIDATION only)
@@ -246,7 +247,8 @@ def architecture_trials() -> Dict[str, Dict[str, Any]]:
 def guidance_trials() -> Dict[str, Dict[str, Any]]:
     """The study in docs/PROTOCOL.md: which training-only annotations help, all on the ovf5 regularisation recipe.
     g_keypoints_f<share> uses keypoints from only that share of the training images."""
-    recipe, no_box = {"aug_tier": "auto"}, {"use_bbox_loss": False, "use_box_crop": False}
+    recipe = {"aug_tier": "auto", "track_part_localization": True}
+    no_box = {"use_bbox_loss": False, "use_box_crop": False}
     model = {"drop_path": 0.3}
     trials = {
         "g_none": {"base": "full", "model": model, "train": {**recipe, **no_box}, "change": "no annotations"},

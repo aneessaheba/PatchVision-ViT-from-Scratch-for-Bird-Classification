@@ -112,6 +112,57 @@ class MetricTracker:
         return rows
 
 
+def species_groups(class_names: Sequence[str]) -> Dict[str, List[int]]:
+    """Look-alike groups from docs/PROTOCOL.md: species whose names end in the same word, at least 2 per group."""
+    groups: Dict[str, List[int]] = {}
+    for index, name in enumerate(class_names):
+        groups.setdefault(name.split()[-1], []).append(index)
+    return {word: members for word, members in groups.items() if len(members) >= 2}
+
+
+def look_alike_metrics(confusion, class_names: Sequence[str]) -> Dict[str, float]:
+    """From a confusion matrix (rows = true species): accuracy on species in look-alike groups, and the share of their
+    images predicted as a different species in the same group."""
+    conf = torch.as_tensor(confusion).double()
+    total = correct = within = 0.0
+    for members in species_groups(class_names).values():
+        block = conf[members][:, members]
+        total += conf[members].sum().item()
+        correct += block.diag().sum().item()
+        within += (block.sum() - block.diag().sum()).item()
+    return {"within_group_accuracy": 100.0 * correct / max(total, 1.0),
+            "within_group_confusion": 100.0 * within / max(total, 1.0)}
+
+
+@torch.no_grad()
+def part_localization(model: nn.Module, loader, device: torch.device, grid: int, amp: tuple) -> Dict[str, float]:
+    """Distance from pooling queries to CUB part points, as a share of the image width.
+    assigned: query i to part i, which is what part guidance trains. best: for each part, whichever query is closest
+    on average, chosen on these same images, so it gives models without part guidance their best case."""
+    use_amp, amp_dtype = amp
+    model.eval()
+    centers = (torch.arange(grid, device=device).float() + 0.5) / grid
+    ys, xs = torch.meshgrid(centers, centers, indexing="ij")
+    xs, ys = xs.reshape(-1), ys.reshape(-1)
+    sums, counts = None, None
+    for x, _m, _y, _id, points in loader:
+        x, points = x.to(device), points.to(device)
+        with torch.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
+            _, aux = model(x)
+        assign = aux["pool_assign"].float()
+        cx, cy = (assign * xs).sum(-1), (assign * ys).sum(-1)                  # (B, t)
+        visible = points[..., 2]                                               # (B, P)
+        error = torch.sqrt((cx[:, None] - points[..., 0, None]) ** 2 + (cy[:, None] - points[..., 1, None]) ** 2)
+        batch_sums = (error * visible[..., None]).sum(0)                       # (P, t)
+        sums = batch_sums if sums is None else sums + batch_sums
+        counts = visible.sum(0) if counts is None else counts + visible.sum(0)
+    mean = sums / counts.clamp_min(1.0)[:, None]
+    seen = counts > 0
+    num_parts = mean.shape[0]
+    return {"assigned": mean[torch.arange(num_parts), torch.arange(num_parts)][seen].mean().item(),
+            "best": mean.min(1).values[seen].mean().item()}
+
+
 @torch.no_grad()
 def measure_efficiency(model: nn.Module, device: torch.device, img_size: int = 224,
                        batch_sizes: Sequence[int] = (1, 64), iters: int = 20) -> Dict[str, float]:
