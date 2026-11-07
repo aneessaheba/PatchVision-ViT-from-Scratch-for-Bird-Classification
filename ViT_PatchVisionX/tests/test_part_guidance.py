@@ -19,6 +19,7 @@ from patchvision.data import (MixupCutmix, build_loaders, hide_erased_points, lo
                               select_annotated_images)
 from patchvision.engine import Trainer
 from patchvision.losses import PartPoolingLoss
+from patchvision.metrics import look_alike_metrics, part_localization, species_groups
 from patchvision.models import PatchVisionX
 
 GRID = 14
@@ -190,3 +191,69 @@ def test_budget_removes_keypoints_from_other_images(paths):
     datasets, _ = build_loaders(info, exp.train, 42, 0, False)
     train_ids = {int(r["image_id"]) for r in datasets["train"].records}
     assert len(datasets["train"].parts.points) == 2 and set(datasets["train"].parts.points) <= train_ids
+
+
+def test_look_alike_metrics_use_only_species_in_groups():
+    names = ["Herring Gull", "California Gull", "Green Jay", "Mallard"]
+    confusion = np.array([[6, 3, 1, 0], [2, 8, 0, 0], [0, 0, 5, 0], [0, 0, 0, 9]])
+    metrics = look_alike_metrics(confusion, names)
+    assert metrics["within_group_accuracy"] == pytest.approx(100 * 14 / 20)
+    assert metrics["within_group_confusion"] == pytest.approx(100 * 5 / 20)
+
+
+def test_project_groups_match_the_protocol():
+    import pandas as pd
+    repo = Path(__file__).resolve().parents[2]
+    test = pd.read_csv(repo / "DataPreprocessing_Results" / "test.csv")
+    names = test.drop_duplicates("label").sort_values("label")["class_name"].tolist()
+    groups = species_groups(names)
+    members = [m for group in groups.values() for m in group]
+    assert len(groups) == 37 and len(members) == 167
+    assert test["label"].isin(members).sum() == 4833
+
+
+class FixedAssign(torch.nn.Module):
+    def __init__(self, assign):
+        super().__init__()
+        self.assign = assign
+
+    def forward(self, x):
+        return None, {"pool_assign": self.assign}
+
+
+def test_part_localization_scores_assigned_and_best_queries():
+    grid = 14
+    points = torch.tensor([[[0.25, 0.25, 1.0], [0.75, 0.75, 1.0], [0.0, 0.0, 0.0]]])
+    assign = peaked_assign(points)                        # query 0 and 1 on their parts
+    swapped = assign[:, [1, 0, 2]]                        # right queries, wrong order
+    loader = [(torch.zeros(1, 3, 8, 8), None, None, None, points)]
+    good = part_localization(FixedAssign(assign), loader, CPU, grid, (False, torch.bfloat16))
+    bad = part_localization(FixedAssign(swapped), loader, CPU, grid, (False, torch.bfloat16))
+    assert good["assigned"] < 0.02 and good["best"] < 0.02
+    assert bad["assigned"] > 0.5 and bad["best"] < 0.02
+
+
+def test_guidance_run_records_validation_measures(paths):
+    spec = all_trials()["g_keypoints"]
+    exp = get_experiment(spec["base"], 42, {**spec["model"], "depth": 2}, {**spec["train"], **TRAIN}, run_name="tracked")
+    trainer = Trainer(exp, paths, device=CPU, num_workers=0, quiet=True)
+    trainer.run()
+    import pandas as pd
+    history = pd.read_csv(trainer.run_dir / "history.csv")
+    assert history["val_part_error_assigned"].notna().any() and history["val_part_error_best"].notna().any()
+    assert (trainer.run_dir / "best_val_confusion.npy").exists()
+    assert not list(trainer.run_dir.glob("test_*"))
+    from importlib import util
+    spec_file = util.spec_from_file_location("compare_guidance", Path(__file__).resolve().parents[1] / "tools" / "compare_guidance.py")
+    tool = util.module_from_spec(spec_file)
+    spec_file.loader.exec_module(tool)
+    row = tool.summarize_run(trainer.run_dir, trainer.ds["val"].class_names)
+    assert row["val_part_error_assigned"] >= row["val_part_error_best"] >= 0
+
+
+def test_runs_without_tracking_build_no_part_loader(paths):
+    exp = get_experiment("base")
+    exp.train.batch_size = 8
+    info = load_data_info(paths)
+    _, loaders = build_loaders(info, exp.train, 42, 0, False)
+    assert "val_parts" not in loaders
