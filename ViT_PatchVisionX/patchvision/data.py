@@ -129,6 +129,38 @@ def part_points_from_map(part_map: torch.Tensor, num_parts: int) -> torch.Tensor
     return out
 
 
+def hide_erased_points(points: torch.Tensor, image: torch.Tensor) -> torch.Tensor:
+    """RandomErasing leaves the part map alone, so a part can sit on a blank patch. Erasing fills with exact zeros
+    after normalisation, which real pixels do not produce in all channels, so those parts become not visible."""
+    _, height, width = image.shape
+    out = points.clone()
+    for i, (x, y, visible) in enumerate(points.tolist()):
+        if visible > 0 and (image[:, min(int(y * height), height - 1), min(int(x * width), width - 1)] == 0).all():
+            out[i] = 0.0
+    return out
+
+
+def select_annotated_images(records: Sequence[dict], fraction: float, seed: int) -> List[int]:
+    """Image ids whose keypoints may be used: `fraction` of the images, spread across species as evenly as possible."""
+    rng = np.random.RandomState(seed)
+    by_class: Dict[int, List[int]] = {}
+    for r in records:
+        by_class.setdefault(int(r["label"]), []).append(int(r["image_id"]))
+    labels = sorted(by_class)
+    rng.shuffle(labels)
+    for label in labels:
+        rng.shuffle(by_class[label])
+    wanted = max(1, round(fraction * len(records)))
+    chosen: List[int] = []
+    depth = 0
+    while len(chosen) < wanted:
+        for label in labels:
+            if depth < len(by_class[label]) and len(chosen) < wanted:
+                chosen.append(by_class[label][depth])
+        depth += 1
+    return chosen
+
+
 def flip_part_points(points: torch.Tensor, flip_order: Sequence[int]) -> torch.Tensor:
     """Part points of a mirrored image: (..., P, 3) -> mirrored x, with left and right parts swapped."""
     out = points[..., list(flip_order), :].clone()
@@ -291,8 +323,8 @@ class CUBDataset(Dataset):
         stacked = torch.cat([mask, paint_part_map(points, offset, w, h)])
         img_t, mask_t = self.transform(img_t, tv_tensors.Mask(stacked))
         mask_t = torch.as_tensor(mask_t).float()
-        return (img_t, mask_t[:1].clamp_(0, 1), int(r["label"]), int(r["image_id"]),
-                part_points_from_map(mask_t[1], num_parts))
+        points = hide_erased_points(part_points_from_map(mask_t[1], num_parts), img_t)
+        return img_t, mask_t[:1].clamp_(0, 1), int(r["label"]), int(r["image_id"]), points
 
 
 class MixupCutmix:
@@ -305,9 +337,13 @@ class MixupCutmix:
         self.nc, self.ma, self.ca, self.pc, self.ls, self.prob = (num_classes, mixup_alpha, cutmix_alpha,
                                                                    p_cutmix, label_smoothing, prob)
 
-    def __call__(self, x, y, mask):
+    def __call__(self, x, y, mask, points=None):
+        """With part points, info also holds "points" and "point_weight". CutMix hides parts under the pasted patch.
+        Mixup uses the parts of whichever image dominates, weighted by its share of the blend."""
         t1 = smooth_one_hot(y, self.nc, self.ls)
         info = {"type": "none", "lam": 1.0}
+        if points is not None:
+            info.update(points=points, point_weight=x.new_ones(x.shape[0]))
         if np.random.rand() > self.prob:
             return x, t1, mask, info
         x2, y2, m2 = x.flip(0), y.flip(0), mask.flip(0)
@@ -323,12 +359,19 @@ class MixupCutmix:
             x[..., y0:y1, x0:x1] = x2[..., y0:y1, x0:x1]
             mask[..., y0:y1, x0:x1] = m2[..., y0:y1, x0:x1]
             lam = 1.0 - ((y1 - y0) * (x1 - x0) / (H * W))
-            info = {"type": "cutmix", "lam": lam}
+            info.update(type="cutmix", lam=lam)
+            if points is not None:
+                px, py = points[..., 0] * W, points[..., 1] * H
+                covered = (px >= x0) & (px < x1) & (py >= y0) & (py < y1)
+                info["points"] = points * (~covered).unsqueeze(-1).to(points.dtype)
         else:                                                            # Mixup
             lam = float(np.random.beta(self.ma, self.ma))
             x = lam * x + (1 - lam) * x2
             mask = lam * mask + (1 - lam) * m2
-            info = {"type": "mixup", "lam": lam}
+            info.update(type="mixup", lam=lam)
+            if points is not None:
+                info["points"] = points if lam >= 0.5 else points.flip(0)
+                info["point_weight"] = x.new_full((x.shape[0],), max(lam, 1 - lam))
         t2 = smooth_one_hot(y2, self.nc, self.ls)
         return x, lam * t1 + (1 - lam) * t2, mask, info
 
@@ -339,11 +382,18 @@ class MixupCutmix:
 def build_loaders(info: DataInfo, tc: TrainConfig, seed: int, num_workers: int, pin_memory: bool):
     """Returns (datasets, loaders) with keys train / val / test / train_clean.
     train_clean = a fixed subset of the training images WITHOUT augmentation, used to measure real train accuracy."""
-    tr_tf = build_transforms(tc.aug_tier, info.img_size, info.mean, info.std, train=True)
+    parts = None
+    if tc.use_part_guidance:
+        parts = load_part_annotations(info.cub_root)
+        if tc.part_fraction < 1.0:
+            kept = select_annotated_images(pd.read_csv(info.train_csv).to_dict("records"), tc.part_fraction, seed)
+            parts.points = {image_id: parts.points[image_id] for image_id in kept if image_id in parts.points}
+    tr_tf = build_transforms(tc.aug_tier, info.img_size, info.mean, info.std, train=True,
+                             part_flip_order=parts.flip_order if parts else None)
     ev_tf = build_transforms("none", info.img_size, info.mean, info.std, train=False)
     crop_p = tc.box_crop_prob if tc.use_box_crop else 0.0
     ds = {"train": CUBDataset(info.train_csv, tr_tf, info.bboxes, info.cub_root, train=True,
-                              box_crop_prob=crop_p, box_crop_margin=tc.box_crop_margin),
+                              box_crop_prob=crop_p, box_crop_margin=tc.box_crop_margin, parts=parts),
           "val": CUBDataset(info.val_csv, ev_tf, info.bboxes, info.cub_root),
           "test": CUBDataset(info.test_csv, ev_tf, info.bboxes, info.cub_root)}
     clean_full = CUBDataset(info.train_csv, ev_tf, info.bboxes, info.cub_root)
