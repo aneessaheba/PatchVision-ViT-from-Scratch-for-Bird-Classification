@@ -95,5 +95,6 @@ Three seeds give limited power, so every comparison reports the per-seed differe
 
 | Date | Change | Reason | Effect on results |
 |---|---|---|---|
+| Nov 6, 2026 | 8x8 patches will not run first. After the pilot, 12x12 runs on one seed, and 8x8 runs only if 12x12 gains at least 1.0 point and a speed test shows it is affordable | One full 8x8 run is estimated at 30 to 40 hours, and the main question does not depend on it. Agreed with Samruddhi Chitnis | None yet |
 | Nov 6, 2026 | Added the self-supervised pretraining test | Overfitting remains large, and Cao et al. report large gains from this approach on other models. Added before any guidance or pretraining results existed | None yet |
 | Nov 6, 2026 | Main question and P1 now compare keypoints with boxes. Added the both-signals model, keypoint budget, confused-pair metric and pilot rule | The literature review found that keypoint supervision of attention is already published, and that its accuracy gains can be small. Made before any part-guidance code or results existed | None yet |
