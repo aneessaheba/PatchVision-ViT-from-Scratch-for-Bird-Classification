@@ -131,6 +131,14 @@ class Trainer:
         self.ds, self.dl = build_loaders(self.info, tc, exp.seed, self.num_workers, dev.type == "cuda")
 
         self.model = build_model(mc).to(dev)
+        if tc.pretrain_run and not resuming:
+            encoder_path = self.paths.results / tc.pretrain_run / f"seed{exp.seed}" / "encoder.pt"
+            if not encoder_path.exists():
+                raise FileNotFoundError(f"{encoder_path} not found - run pretrain.py {exp.seed} first")
+            missing, unexpected = self.model.load_state_dict(torch.load(encoder_path, map_location=dev), strict=False)
+            if unexpected or any(not name.startswith("head.") for name in missing):
+                raise RuntimeError(f"{encoder_path} does not match this model: {missing} {unexpected}")
+            self.log(f"Started from {encoder_path}")
         self.opt = build_optimizer(self.model, tc)
         self.sched = build_scheduler(self.opt, tc, len(self.dl["train"]))
         self.use_amp = tc.amp and dev.type == "cuda"
