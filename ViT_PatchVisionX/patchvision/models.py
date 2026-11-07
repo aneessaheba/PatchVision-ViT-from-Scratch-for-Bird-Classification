@@ -314,7 +314,7 @@ class GraphPool(nn.Module):
             A_new = C @ A_rn @ C.transpose(1, 2)
             A_new = A_new / A_new.sum(-1, keepdim=True).clamp_min(1e-6)
             A_new = A_new + torch.eye(self.n_out, device=A_new.device).unsqueeze(0)
-        return self.norm(x_new.to(in_dtype)), A_new
+        return self.norm(x_new.to(in_dtype)), A_new, C
 
 
 class ConvTokenizer(nn.Module):
@@ -389,10 +389,10 @@ class PatchVisionX(nn.Module):
         bases = self.base_adj
         attn_maps: List[torch.Tensor] = []
         gate_mean, gate_sp = [], []
-        A = None
+        A, assign = None, None
         for i, blk in enumerate(self.blocks):
             if self.pool is not None and i == self.n_pre:
-                x, A_pool = self.pool(x, A)
+                x, A_pool, assign = self.pool(x, A)
                 bases = soft_scale_bases(A_pool, self.scales)
             x, A, aux = blk(x, bases)
             if i < self.n_pre:                       # tokens still map 1:1 to image patches
@@ -400,7 +400,7 @@ class PatchVisionX(nn.Module):
             gate_mean.append(aux["gate_mean"])
             gate_sp.append(aux["gate_sparsity"])
         logits = self.head(self.norm(x).mean(dim=1))
-        return logits, {"attn_maps": attn_maps,
+        return logits, {"attn_maps": attn_maps, "pool_assign": assign,
                         "gate_mean": torch.stack(gate_mean).mean(),
                         "gate_sparsity": torch.stack(gate_sp).mean()}
 

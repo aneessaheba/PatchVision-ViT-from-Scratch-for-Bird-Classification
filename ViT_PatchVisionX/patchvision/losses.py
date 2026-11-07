@@ -41,6 +41,35 @@ class BBoxAttentionLoss(nn.Module):
         return loss, masses.detach(), valid
 
 
+class PartPoolingLoss(nn.Module):
+    """Part keypoints supervise the graph pooling: query i of the pooling assignment (B, t, n) should take its tokens
+    from around part i. The target is a Gaussian around the point on the token grid (sigma in tokens); the remaining
+    queries stay free. Parts that are not visible do not count, and weights scale each image in a batch."""
+
+    def __init__(self, grid: int, sigma: float = 1.0):
+        super().__init__()
+        centers = (torch.arange(grid).float() + 0.5) / grid
+        ys, xs = torch.meshgrid(centers, centers, indexing="ij")
+        self.register_buffer("xs", xs.reshape(-1), persistent=False)
+        self.register_buffer("ys", ys.reshape(-1), persistent=False)
+        self.sigma = sigma / grid
+
+    def forward(self, assign: torch.Tensor, points: torch.Tensor, weights: torch.Tensor):
+        num_parts = points.shape[1]
+        px, py, visible = points[..., 0, None], points[..., 1, None], points[..., 2]
+        dist2 = (self.xs - px) ** 2 + (self.ys - py) ** 2                          # (B, P, n)
+        target = torch.softmax(-dist2 / (2 * self.sigma ** 2), dim=-1)
+        queries = assign[:, :num_parts].float()
+        ce = -(target * queries.clamp_min(1e-8).log()).sum(-1)                     # (B, P)
+        scale = visible * weights[:, None]
+        loss = (ce * scale).sum() / visible.sum().clamp_min(1.0)
+        with torch.no_grad():
+            cx, cy = (queries * self.xs).sum(-1), (queries * self.ys).sum(-1)
+            error = torch.sqrt((cx - points[..., 0]) ** 2 + (cy - points[..., 1]) ** 2)
+            mean_error = (error * visible).sum() / visible.sum().clamp_min(1.0)
+        return loss, mean_error
+
+
 def flip_tokens(a: torch.Tensor, grid: int) -> torch.Tensor:
     """Horizontally flip a per-token map (B, grid*grid)."""
     return a.view(a.shape[0], grid, grid).flip(-1).reshape(a.shape[0], grid * grid)
@@ -73,8 +102,9 @@ class TrainingLoss(nn.Module):
         self.tc, self.grid = tc, grid
         self.ce = SoftTargetCrossEntropy()
         self.attn_loss = BBoxAttentionLoss()
+        self.part_loss = PartPoolingLoss(grid)
 
-    def forward(self, logits, soft_targets, aux, patch_mask, two_views: bool):
+    def forward(self, logits, soft_targets, aux, patch_mask, two_views: bool, part_points=None, part_weights=None):
         tc = self.tc
         zero = logits.new_zeros(())
         if two_views:
@@ -100,6 +130,11 @@ class TrainingLoss(nn.Module):
             total = total + tc.bbox_weight * attn_l
         if two_views and tc.use_consistency:
             total = total + tc.cons_logit_weight * cons_logit + tc.cons_attn_weight * cons_attn
-        return {"total": total, "ce": ce.detach(), "attn": attn_l.detach(),
+        part_l, part_error = zero, zero
+        if part_points is not None:
+            part_l, part_error = self.part_loss(aux["pool_assign"], part_points, part_weights)
+            total = total + tc.part_weight * part_l
+        return {"total": total, "ce": ce.detach(), "attn": attn_l.detach(), "part": part_l.detach(),
+                "part_error": part_error,
                 "cons_logit": cons_logit.detach(), "cons_attn": cons_attn.detach(),
                 "mass": mass[:B], "valid": valid[:B]}
