@@ -69,4 +69,7 @@ class CompactResNet(nn.Module):
 
 
 def build_model(cfg: CNNConfig) -> nn.Module:
-    return CompactResNet(cfg)
+    if cfg.arch == "resnet":
+        return CompactResNet(cfg)
+    from .transformers import PlainViT, PVTv2B0
+    return {"plain_vit": PlainViT, "pvtv2_b0": PVTv2B0}[cfg.arch](cfg)

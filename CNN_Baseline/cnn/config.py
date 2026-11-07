@@ -22,6 +22,8 @@ class CNNConfig:
     widths: Tuple[int, ...] = (39, 78, 156, 312)
     blocks: Tuple[int, ...] = (2, 2, 2, 2)
     zero_init_residual: bool = True      # last BatchNorm of every block starts at 0 (standard trick for stable training)
+    arch: str = "resnet"                 # resnet | plain_vit | pvtv2_b0 (see cnn/transformers.py)
+    drop_path: float = 0.1               # stochastic depth for plain_vit and pvtv2_b0
 
 
 @dataclass
@@ -43,6 +45,9 @@ CNN_SUITE: Dict[str, Dict[str, Dict[str, Any]]] = {
     "cnn_small": {"model": {"widths": (39, 78, 156, 312)}, "train": dict(_CNN_TRAIN)},
     # ~11.28 M parameters = ResNet-18 layout trained from scratch: "what does more CNN capacity buy?"
     "cnn_large": {"model": {"widths": (64, 128, 256, 512)}, "train": dict(_CNN_TRAIN)},
+    # outside reference models under the same recipe, with no annotations
+    "plain_vit": {"model": {"arch": "plain_vit"}, "train": dict(_CNN_TRAIN)},
+    "pvtv2_b0": {"model": {"arch": "pvtv2_b0"}, "train": dict(_CNN_TRAIN)},
 }
 
 

@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from .config import TrainConfig
 
-_NO_DECAY_KEYS = ("pos_embed", "gate_slope", "log_tau", "phi", ".U")
+_NO_DECAY_KEYS = ("pos_embed", "cls_token", "gate_slope", "log_tau", "phi", ".U")
 
 
 def build_optimizer(model: nn.Module, tc: TrainConfig) -> torch.optim.Optimizer:
