@@ -4,7 +4,7 @@
 
 ## 1. Question
 
-Does training-only guidance improve a small Vision Transformer trained from scratch on CUB-200-2011, and how much of its lead over a matched CNN comes from guidance and not from architecture?
+How much do training-only annotations (boxes and part keypoints) help a small Vision Transformer trained from scratch on CUB-200-2011, and how much of its lead over a matched CNN comes from guidance and not from architecture?
 
 ## 2. Fixed setup
 
@@ -31,6 +31,8 @@ The same seed does not give an exact repeat. Two runs of `ovf5_dp0.3_autoaug` wi
 - **Within-group accuracy:** top-1 on those test images.
 - **Within-group confusion:** the share of those images predicted as a different species in the same group.
 
+**Confused-pair metric:** before any part-guided run, take the most confused species pairs from the box-only ViT's validation predictions, using all three seeds, and freeze that list. The metric is the share of those species' test images predicted as their partner species. The exact list size is fixed when the list is frozen and recorded in the deviation log.
+
 **Localization, for guided ViT models:** attention inside the bird box, and attention near part locations if parts are used.
 
 ## 4. How decisions are made during development
@@ -46,7 +48,9 @@ Development uses validation data only, with the default `train.py` command.
 |---|---|
 | Pilots, tuning, depth and patch size | 1 |
 | Ablations | 3 |
-| Final comparison and data-size sweep | 3 |
+| Final comparison, keypoint budget and data-size sweep | 3 |
+
+**Part-guidance pilot:** before the full study, run one seed of keypoints vs. box. If validation shows no movement in accuracy, within-group confusion or part localization, part guidance stops being the main claim, and the guidance comparison with the CNN becomes the main contribution. Either way, the outcome goes in the deviation log.
 
 **Equal tuning:** the CNNs get the same search as the ViT, covering stochastic depth, weight decay, auto augmentation, dropout, and the same two combinations, with the same decision rule.
 
@@ -64,12 +68,12 @@ Development uses validation data only, with the default `train.py` command.
 
 | # | Comparison |
 |---|---|
-| P1 | ViT with part guidance vs. ViT with box guidance |
+| P1 | ViT with keypoint guidance vs. ViT with box guidance |
 | P2 | ViT with box guidance vs. ViT without guidance |
 | P3 | ViT vs. matched CNN, both tuned and unguided |
 | P4 | ViT vs. matched CNN, both tuned and guided |
 
-P1 is removed if the literature review or Phase 5 rules out part guidance. All other comparisons are reported as descriptive.
+P1 is removed if the pilot rules out part guidance. The ViT with both box and keypoint guidance, the keypoint budget at 0.5%, 1%, 5%, 10% and 100% of training images, and all other comparisons are reported as descriptive.
 
 **A result counts as a claim only if both hold:**
 1. The difference has the same direction in all three seeds.
@@ -82,10 +86,10 @@ Three seeds give limited power, so every comparison reports the per-seed differe
 - [x] Turn early stopping off for all models
 - [x] Make saved predictions and reported accuracy use the same top-1 result
 - [x] Commit an environment file and record the Docker image, in `requirements-5090.txt`
-- [ ] Finish the GvT code comparison and literature review
+- [x] Finish the GvT code comparison and literature review, in `docs/GVT_COMPARISON.md` and `docs/LITERATURE_NOTES.md`
 
 ## 8. Deviation log
 
 | Date | Change | Reason | Effect on results |
 |---|---|---|---|
-| | | | |
+| Nov 6, 2026 | Main question and P1 now compare keypoints with boxes. Added the both-signals model, keypoint budget, confused-pair metric and pilot rule | The literature review found that keypoint supervision of attention is already published, and that its accuracy gains can be small. Made before any part-guidance code or results existed | None yet |
