@@ -12,7 +12,7 @@ How much do training-only annotations (boxes and part keypoints) help a small Vi
 |---|---|
 | Data | Official CUB split, using the existing 5,394 train, 600 validation and 5,794 test files |
 | Input | 224 x 224, with the existing normalization and augmentation tiers |
-| Pretrained weights | None |
+| Pretrained weights | None from other datasets; one test uses self-supervised pretraining on the training images only (section 4) |
 | Hardware and software | RTX 5090, Python 3.12, PyTorch 2.11.0, torchvision 0.26.0, one recorded Docker image |
 | Schedule | 300 epochs, early stopping off, for every model |
 | Best epoch | Highest validation top-1; the earliest epoch wins a tie |
@@ -52,6 +52,8 @@ Development uses validation data only, with the default `train.py` command.
 | Final comparison, keypoint budget and data-size sweep | 3 |
 
 **Part-guidance pilot:** before the full study, run one seed of keypoints vs. box. If validation shows no movement in accuracy, within-group confusion or part localization, part guidance stops being the main claim, and the guidance comparison with the CNN becomes the main contribution. Either way, the outcome goes in the deviation log.
+
+**Self-supervised pretraining test:** one seed of `g_box_pretrained` against `g_box`, with the standard adoption rule. If adopted, every final model, including the CNNs, starts from pretraining on the same training images, and this is reported as a change to the recipe.
 
 **Equal tuning:** the CNNs get the same search as the ViT, covering stochastic depth, weight decay, auto augmentation, dropout, and the same two combinations, with the same decision rule.
 
@@ -93,4 +95,5 @@ Three seeds give limited power, so every comparison reports the per-seed differe
 
 | Date | Change | Reason | Effect on results |
 |---|---|---|---|
+| Nov 6, 2026 | Added the self-supervised pretraining test | Overfitting remains large, and Cao et al. report large gains from this approach on other models. Added before any guidance or pretraining results existed | None yet |
 | Nov 6, 2026 | Main question and P1 now compare keypoints with boxes. Added the both-signals model, keypoint budget, confused-pair metric and pilot rule | The literature review found that keypoint supervision of attention is already published, and that its accuracy gains can be small. Made before any part-guidance code or results existed | None yet |
