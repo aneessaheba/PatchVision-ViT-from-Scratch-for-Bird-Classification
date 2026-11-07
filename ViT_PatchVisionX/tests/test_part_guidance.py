@@ -257,3 +257,63 @@ def test_runs_without_tracking_build_no_part_loader(paths):
     info = load_data_info(paths)
     _, loaders = build_loaders(info, exp.train, 42, 0, False)
     assert "val_parts" not in loaders
+
+
+def small_pretrain(paths, epochs=2):
+    from patchvision.pretrain import pretrain_experiment, run_instance_pretraining
+    exp = pretrain_experiment(42, epochs)
+    exp.model.depth = 2
+    for key, value in TRAIN.items():
+        if key != "epochs":
+            setattr(exp.train, key, value)
+    return exp, run_instance_pretraining(exp, paths, device=CPU, num_workers=0, quiet=True)
+
+
+def test_pretraining_saves_an_encoder_without_touching_other_data(paths, monkeypatch):
+    from patchvision import data as data_module
+    original = data_module.CUBDataset.__getitem__
+    read = []
+
+    def spy(self, index):
+        read.append(self)
+        return original(self, index)
+
+    monkeypatch.setattr(data_module.CUBDataset, "__getitem__", spy)
+    exp, path = small_pretrain(paths)
+    encoder = torch.load(path, weights_only=False)
+    assert encoder and not any(key.startswith("head.") for key in encoder)
+    assert {dataset.train for dataset in read} == {True}
+    train_ids = {int(row["image_id"]) for row in read[0].records}
+    assert len(train_ids) == 24
+    assert exp.train.use_bbox_loss is False and exp.train.use_box_crop is False and exp.train.use_consistency is False
+
+
+def test_pretraining_can_resume_and_finished_run_is_kept(paths):
+    exp, path = small_pretrain(paths, epochs=1)
+    log_file = path.parent / "train_log.txt"
+    path.unlink()
+    exp, path = small_pretrain(paths, epochs=2)
+    assert path.exists() and "RESUMED at epoch 2" in log_file.read_text()
+    log = log_file.read_text()
+    small_pretrain(paths, epochs=2)
+    assert log_file.read_text() == log
+
+
+def test_training_starts_from_the_pretrained_encoder(paths):
+    _, path = small_pretrain(paths)
+    spec = all_trials()["g_box_pretrained"]
+    exp = get_experiment(spec["base"], 42, {**spec["model"], "depth": 2}, {**spec["train"], **TRAIN}, run_name="started")
+    trainer = Trainer(exp, paths, device=CPU, num_workers=0, quiet=True)
+    trainer._setup()
+    encoder = torch.load(path, weights_only=False)
+    state = trainer.model.state_dict()
+    assert all(torch.equal(state[key], value) for key, value in encoder.items())
+    assert state["head.weight"].shape[0] == 4
+    assert "Started from" in (trainer.run_dir / "train_log.txt").read_text()
+
+
+def test_missing_encoder_gives_a_clear_error(paths):
+    spec = all_trials()["g_box_pretrained"]
+    exp = get_experiment(spec["base"], 42, {**spec["model"], "depth": 2}, {**spec["train"], **TRAIN}, run_name="no_encoder")
+    with pytest.raises(FileNotFoundError, match="pretrain.py 42"):
+        Trainer(exp, paths, device=CPU, num_workers=0, quiet=True).run()
