@@ -15,11 +15,13 @@ import torch
 import torch.nn as nn
 
 from .config import CNNConfig
+from .transformers import DropPath, PlainViT, PVTv2B0
 
 
 class BasicBlock(nn.Module):
-    def __init__(self, cin: int, cout: int, stride: int):
+    def __init__(self, cin: int, cout: int, stride: int, drop_path: float = 0.0):
         super().__init__()
+        self.drop_path = DropPath(drop_path)
         self.conv1 = nn.Conv2d(cin, cout, 3, stride, 1, bias=False)
         self.bn1 = nn.BatchNorm2d(cout)
         self.conv2 = nn.Conv2d(cout, cout, 3, 1, 1, bias=False)
@@ -33,7 +35,7 @@ class BasicBlock(nn.Module):
         idt = x if self.down is None else self.down(x)
         out = self.act(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
-        return self.act(out + idt)
+        return self.act(self.drop_path(out) + idt)
 
 
 class CompactResNet(nn.Module):
@@ -43,14 +45,16 @@ class CompactResNet(nn.Module):
         self.stem = nn.Sequential(nn.Conv2d(3, w[0], 7, 2, 3, bias=False), nn.BatchNorm2d(w[0]),
                                   nn.ReLU(inplace=True), nn.MaxPool2d(3, 2, 1))
         stages, cin = [], w[0]
+        rates = iter(torch.linspace(0, cfg.resnet_drop_path, sum(cfg.blocks)).tolist())
         for i, (c, n) in enumerate(zip(w, cfg.blocks)):
             blocks = []
             for j in range(n):
-                blocks.append(BasicBlock(cin, c, stride=(2 if (i > 0 and j == 0) else 1)))
+                blocks.append(BasicBlock(cin, c, stride=(2 if (i > 0 and j == 0) else 1), drop_path=next(rates)))
                 cin = c
             stages.append(nn.Sequential(*blocks))
         self.stages = nn.Sequential(*stages)
         self.pool = nn.AdaptiveAvgPool2d(1)
+        self.dropout = nn.Dropout(cfg.resnet_dropout) if cfg.resnet_dropout > 0 else nn.Identity()
         self.head = nn.Linear(w[-1], cfg.num_classes)
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -65,11 +69,10 @@ class CompactResNet(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.stages(self.stem(x))
-        return self.head(torch.flatten(self.pool(x), 1))
+        return self.head(self.dropout(torch.flatten(self.pool(x), 1)))
 
 
 def build_model(cfg: CNNConfig) -> nn.Module:
     if cfg.arch == "resnet":
         return CompactResNet(cfg)
-    from .transformers import PlainViT, PVTv2B0
     return {"plain_vit": PlainViT, "pvtv2_b0": PVTv2B0}[cfg.arch](cfg)

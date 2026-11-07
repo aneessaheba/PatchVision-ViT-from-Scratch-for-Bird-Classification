@@ -24,6 +24,8 @@ class CNNConfig:
     zero_init_residual: bool = True      # last BatchNorm of every block starts at 0 (standard trick for stable training)
     arch: str = "resnet"                 # resnet | plain_vit | pvtv2_b0 (see cnn/transformers.py)
     drop_path: float = 0.1               # stochastic depth for plain_vit and pvtv2_b0
+    resnet_drop_path: float = 0.0        # stochastic depth for the ResNet (max rate, linearly increased across blocks)
+    resnet_dropout: float = 0.0          # dropout before the ResNet's classifier
 
 
 @dataclass
@@ -49,6 +51,19 @@ CNN_SUITE: Dict[str, Dict[str, Dict[str, Any]]] = {
     "plain_vit": {"model": {"arch": "plain_vit"}, "train": dict(_CNN_TRAIN)},
     "pvtv2_b0": {"model": {"arch": "pvtv2_b0"}, "train": dict(_CNN_TRAIN)},
 }
+
+
+# The same regularisation search the ViT received: four single changes and the same two combinations, on the matched CNN.
+_TUNING = {
+    "dp0.3": ({"resnet_drop_path": 0.3}, {}),
+    "wd0.1": ({}, {"weight_decay": 0.1}),
+    "auto": ({}, {"aug_tier": "auto"}),
+    "dropout0.1": ({"resnet_dropout": 0.1}, {}),
+    "dp0.3_auto": ({"resnet_drop_path": 0.3}, {"aug_tier": "auto"}),
+    "all_four": ({"resnet_drop_path": 0.3, "resnet_dropout": 0.1}, {"aug_tier": "auto", "weight_decay": 0.1}),
+}
+for _name, (_model, _train) in _TUNING.items():
+    CNN_SUITE[f"cnn_small_{_name}"] = {"model": {"widths": (39, 78, 156, 312), **_model}, "train": {**_CNN_TRAIN, **_train}}
 
 
 def _build(cls, d: Dict[str, Any]):
