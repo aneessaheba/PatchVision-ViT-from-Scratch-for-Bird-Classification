@@ -276,8 +276,21 @@ def guidance_trials() -> Dict[str, Dict[str, Any]]:
     return trials
 
 
+def patch_trials() -> Dict[str, Dict[str, Any]]:
+    """Finer tokens: each guidance trial with 12x12 patches on 216x216 images (18x18 = 324 tokens, 81 after pooling).
+    216 is the multiple of 12 closest to 224. Run only after the guidance pilot (docs/PROTOCOL.md)."""
+    trials = {}
+    for name in ("g_none", "g_box", "g_keypoints", "g_both"):
+        spec = copy.deepcopy(guidance_trials()[name])
+        spec["model"]["patch_size"] = 12
+        spec["train"]["img_size"] = 216
+        spec["change"] += "; 12x12 patches on 216x216 images"
+        trials[f"{name}_p12"] = spec
+    return trials
+
+
 def all_trials() -> Dict[str, Dict[str, Any]]:
-    return {**overfit_trials(), **combined_trials(), **architecture_trials(), **guidance_trials()}
+    return {**overfit_trials(), **combined_trials(), **architecture_trials(), **guidance_trials(), **patch_trials()}
 
 
 def get_trial(name: str, seed: int = 42) -> ExperimentConfig:
