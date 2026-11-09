@@ -146,7 +146,7 @@ class Trainer:
                           else torch.float16)
         self.amp = (self.use_amp, self.amp_dtype)
         self.scaler = torch.amp.GradScaler("cuda") if (self.use_amp and self.amp_dtype == torch.float16) else None
-        self.criterion = TrainingLoss(tc, self.grid)
+        self.criterion = TrainingLoss(tc, self.grid).to(dev)
         mx = self.info.mixcfg
         self.mixer = (MixupCutmix(self.info.num_classes, mx["mixup_alpha"], mx["cutmix_alpha"], mx["p_cutmix"],
                                   tc.label_smoothing) if tc.use_mixup_cutmix else None)
