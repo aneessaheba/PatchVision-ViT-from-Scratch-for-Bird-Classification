@@ -174,6 +174,21 @@ def test_every_guidance_trial_trains_end_to_end(paths, name):
         assert history["train_part"] == 0
 
 
+GPU = (torch.device("cuda") if torch.cuda.is_available()
+       else torch.device("mps") if torch.backends.mps.is_available() else None)
+
+
+@pytest.mark.skipif(GPU is None, reason="needs a GPU (CUDA or Apple MPS)")
+def test_keypoint_guidance_trains_on_a_gpu(paths):
+    """The loss holds its own token grid, so it has to move to the GPU with the model."""
+    spec = all_trials()["g_keypoints"]
+    exp = get_experiment(spec["base"], 42, {**spec["model"], "depth": 2}, {**spec["train"], **TRAIN, "epochs": 1},
+                         run_name="g_keypoints_gpu")
+    trainer = Trainer(exp, paths, device=GPU, num_workers=0, quiet=True)
+    trainer.run()
+    assert trainer.history[-1]["train_part"] > 0
+
+
 def test_validation_and_test_loaders_do_not_receive_parts(paths):
     exp = get_trial("g_keypoints")
     info = load_data_info(paths)
