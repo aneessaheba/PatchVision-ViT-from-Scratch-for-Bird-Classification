@@ -35,7 +35,7 @@ from .config import ExperimentConfig, PathsConfig
 from .data import MixupCutmix, build_loaders, flip_part_points, load_data_info
 from .losses import BBoxAttentionLoss, TrainingLoss, smooth_one_hot
 from .metrics import MetricTracker, box_to_patch_mask, measure_efficiency, part_localization
-from .models import TOKENIZER_STRIDE, build_model
+from .models import build_model
 from .optim import build_optimizer, build_scheduler
 from .regularization import EarlyStopping, ModelEMA
 from .utils import Logger, count_parameters, env_info, fmt_time, get_device, save_json, seed_everything
@@ -122,12 +122,12 @@ class Trainer:
         self.log = Logger(rd / "train_log.txt", self.quiet)
         seed_everything(exp.seed)
 
-        self.info = load_data_info(self.paths)
+        self.info = load_data_info(self.paths, tc.img_size)
         if self.info.bboxes is None and (tc.use_bbox_loss or tc.use_box_crop):
             raise FileNotFoundError(f"{self.paths.cub / 'bounding_boxes.txt'} not found - needed by use_bbox_loss / "
                                     f"use_box_crop (set both to False to train without boxes)")
         mc.img_size, mc.num_classes = self.info.img_size, self.info.num_classes
-        self.grid = mc.img_size // TOKENIZER_STRIDE
+        self.grid = mc.grid
         self.ds, self.dl = build_loaders(self.info, tc, exp.seed, self.num_workers, dev.type == "cuda")
 
         self.model = build_model(mc).to(dev)

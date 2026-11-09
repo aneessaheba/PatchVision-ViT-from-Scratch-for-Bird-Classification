@@ -37,7 +37,7 @@ import torch.nn.functional as F
 
 from .config import ModelConfig
 
-TOKENIZER_STRIDE = 16   # conv 8x8/8 followed by group-conv 5x5/2  ->  224 / 16 = 14 tokens per side
+TOKENIZER_STRIDE = 16   # default patch: conv 8x8/8 then group-conv 5x5/2 -> 224 / 16 = 14 tokens per side (ModelConfig.patch_size)
 
 
 # ----------------------------------------------------------------------------------------------
@@ -318,13 +318,15 @@ class GraphPool(nn.Module):
 
 
 class ConvTokenizer(nn.Module):
-    """224x224 -> (conv 8x8/8) 28x28 -> (group-conv 5x5/2) 14x14 = 196 tokens (an effective 16x16 patch)."""
+    """224x224 -> (conv 8x8/8) 28x28 -> (group-conv 5x5/2) 14x14 = 196 tokens (an effective 16x16 patch).
+    With patch=12: 216x216 -> (conv 6x6/6) 36x36 -> (group-conv 5x5/2) 18x18 = 324 tokens."""
 
-    def __init__(self, in_ch: int, dim: int, groups: int):
+    def __init__(self, in_ch: int, dim: int, groups: int, patch: int = TOKENIZER_STRIDE):
         super().__init__()
         mid = dim // 2
         assert mid % groups == 0 and dim % groups == 0, "embed_dim/2 and embed_dim must be divisible by tok_groups"
-        self.conv1 = nn.Conv2d(in_ch, mid, kernel_size=8, stride=8)
+        assert patch % 2 == 0, "patch_size must be even (the second convolution has stride 2)"
+        self.conv1 = nn.Conv2d(in_ch, mid, kernel_size=patch // 2, stride=patch // 2)
         self.bn1 = nn.BatchNorm2d(mid)
         self.act = nn.GELU()
         self.conv2 = nn.Conv2d(mid, dim, kernel_size=5, stride=2, padding=2, groups=groups)
@@ -342,16 +344,16 @@ class ConvTokenizer(nn.Module):
 class PatchVisionX(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
-        assert cfg.img_size % TOKENIZER_STRIDE == 0, "img_size must be a multiple of 16"
+        assert cfg.img_size % cfg.patch_size == 0, f"img_size must be a multiple of patch_size ({cfg.patch_size})"
         self.cfg = cfg
-        g = cfg.img_size // TOKENIZER_STRIDE
+        g = cfg.grid
         self.grid, n0 = g, g * g
         self.scales = cfg.effective_scales()
         pre = cfg.resolved_pool_after()
         self.n_pre = pre if 0 < pre < cfg.depth else cfg.depth          # depth < 2 -> no pooling
         n_post = max(1, n0 // cfg.pool_ratio)
 
-        self.tokenizer = ConvTokenizer(3, cfg.embed_dim, cfg.tok_groups)
+        self.tokenizer = ConvTokenizer(3, cfg.embed_dim, cfg.tok_groups, cfg.patch_size)
         if (not cfg.use_lfe) or cfg.keep_abs_pos:
             self.pos_embed = nn.Parameter(torch.zeros(1, n0, cfg.embed_dim))
             nn.init.trunc_normal_(self.pos_embed, std=0.02)

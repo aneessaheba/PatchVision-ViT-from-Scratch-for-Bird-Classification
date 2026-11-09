@@ -14,7 +14,7 @@ from .data import build_loaders, load_data_info
 from .engine import Trainer
 from .losses import TrainingLoss, smooth_one_hot
 from .metrics import box_to_patch_mask, measure_efficiency
-from .models import TOKENIZER_STRIDE, build_model
+from .models import build_model
 from .utils import count_parameters, get_device, seed_everything
 
 METRIC_COLS = [("test_acc1", "top-1 (%)"), ("test_acc5", "top-5 (%)"), ("test_macro_f1", "macro-F1 (%)"),
@@ -29,9 +29,9 @@ def dry_run(exp: ExperimentConfig, paths: PathsConfig, device: Optional[torch.de
     flip-consistency two-view path). Checks shapes, loss at initialisation (~ln(classes)) and gradient flow."""
     device = device or get_device()
     tc, mc = exp.train, exp.model
-    info = load_data_info(paths)
+    info = load_data_info(paths, tc.img_size)
     mc.img_size, mc.num_classes = info.img_size, info.num_classes
-    grid = mc.img_size // TOKENIZER_STRIDE
+    grid = mc.grid
     seed_everything(exp.seed)
     _, dl = build_loaders(info, tc, exp.seed, num_workers=0, pin_memory=False)
     model = build_model(mc).to(device)

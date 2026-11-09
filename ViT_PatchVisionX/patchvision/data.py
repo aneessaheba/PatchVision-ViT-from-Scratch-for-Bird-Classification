@@ -168,7 +168,8 @@ def flip_part_points(points: torch.Tensor, flip_order: Sequence[int]) -> torch.T
     return out
 
 
-def load_data_info(paths: PathsConfig) -> DataInfo:
+def load_data_info(paths: PathsConfig, img_size: Optional[int] = None) -> DataInfo:
+    """img_size overrides the size in preprocess_config.json (e.g. 216 for 12x12 patches)."""
     prep = paths.prep
     for name in ("preprocess_config.json", "norm_stats.json", "train.csv", "val.csv", "test.csv"):
         if not (prep / name).exists():
@@ -178,7 +179,7 @@ def load_data_info(paths: PathsConfig) -> DataInfo:
     assert np.allclose(stats["mean"], cfg["mean"]) and np.allclose(stats["std"], cfg["std"]), \
         "norm_stats.json and preprocess_config.json disagree on mean/std"
     num_classes = int(pd.read_csv(prep / "train.csv")["label"].nunique())
-    return DataInfo(img_size=cfg["img_size"], batch_size=cfg["batch_size"], mean=stats["mean"], std=stats["std"],
+    return DataInfo(img_size=img_size or cfg["img_size"], batch_size=cfg["batch_size"], mean=stats["mean"], std=stats["std"],
                     mixcfg=cfg["mixup_cutmix"], splits=cfg.get("splits", {}), tiers=cfg.get("train_transforms", {}),
                     num_classes=num_classes, train_csv=prep / "train.csv", val_csv=prep / "val.csv",
                     test_csv=prep / "test.csv", cub_root=paths.cub, bboxes=load_bboxes(paths.cub / "bounding_boxes.txt"))

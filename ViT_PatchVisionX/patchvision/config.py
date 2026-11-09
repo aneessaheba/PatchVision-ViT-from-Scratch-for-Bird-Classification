@@ -53,7 +53,8 @@ class ModelConfig:
     drop_path: float = 0.1            # stochastic depth (max rate, linearly increased)
 
     # --- inherited from GvT (Sci. Rep. 2025) ---
-    tok_groups: int = 4               # group-conv groups in the conv tokenizer (total stride 16 -> 14x14 tokens)
+    patch_size: int = 16              # effective patch of the conv tokenizer (even); 224 / 16 = 14x14 tokens
+    tok_groups: int = 4               # group-conv groups in the conv tokenizer
     pool_after: Optional[int] = None  # blocks BEFORE graph pooling (default depth // 2)
     pool_ratio: int = 4               # token reduction at pooling (196 -> 49)
     adj_mode: str = "hadamard"        # "hadamard": A = (A_I + I) * E | "sum": A = (A_I + I) + E
@@ -65,6 +66,11 @@ class ModelConfig:
     use_multiscale: bool = True       # heads are split into groups that attend over different graph scales
     scales: Tuple[int, ...] = (1, 2, 4, 0)   # hop radius per head group; 0 = global (all tokens)
     restrict_attention: bool = False  # False: scales shape queries/keys only, attention spans all tokens (all runs so far)
+
+    @property
+    def grid(self) -> int:
+        """Tokens per side."""
+        return self.img_size // self.patch_size
 
     def effective_scales(self) -> Tuple[int, ...]:
         return tuple(self.scales) if self.use_multiscale else (1,)
@@ -91,6 +97,7 @@ class TrainConfig:
     amp: bool = True
 
     # --- data (tiers are defined in preprocess_config.json) ---
+    img_size: Optional[int] = None    # None: the size in preprocess_config.json (224); must be a multiple of patch_size
     aug_tier: str = "strong"          # none | basic | strong | auto
     use_mixup_cutmix: bool = True
 
